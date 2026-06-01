@@ -1,0 +1,362 @@
+from __future__ import annotations
+
+import asyncio
+import json
+import time
+from datetime import datetime, timezone, timedelta
+from typing import Any, Protocol
+
+import httpx
+import structlog
+
+logger = structlog.get_logger(__name__)
+
+_PING_TIMEOUT = 5.0
+
+
+class ConnectionAdapter(Protocol):
+    async def ping(self) -> None: ...
+    async def preview(self, query: str, start: datetime | None, end: datetime | None, limit: int) -> list[dict]: ...
+    async def schema(self, start: datetime | None, end: datetime | None) -> tuple[dict[str, dict], int]: ...
+
+
+# ── Schema helpers ────────────────────────────────────────────────────────────
+
+def _py_type(val: Any) -> str:
+    if isinstance(val, bool):
+        return "bool"
+    if isinstance(val, int):
+        return "int"
+    if isinstance(val, float):
+        return "float"
+    if isinstance(val, list):
+        return "list"
+    if isinstance(val, dict):
+        return "object"
+    return "string"
+
+
+def _infer_schema(records: list[dict]) -> dict[str, dict]:
+    schema: dict[str, dict] = {}
+
+    def _walk(obj: Any, prefix: str, depth: int) -> None:
+        if depth > 3:
+            return
+        if isinstance(obj, dict):
+            for k, v in obj.items():
+                if str(k).startswith("_"):
+                    continue
+                _walk(v, f"{prefix}{k}.", depth + 1)
+        else:
+            path = prefix.rstrip(".")
+            if path and path not in schema:
+                schema[path] = {
+                    "type": _py_type(obj),
+                    "example": obj if not isinstance(obj, (dict, list)) else None,
+                }
+
+    for record in records:
+        _walk(record, "", 0)
+
+    return schema
+
+
+# ── Base ──────────────────────────────────────────────────────────────────────
+
+class BaseAdapter:
+    _health_path: str | None = None
+
+    def __init__(self, conn_or_config, creds) -> None:
+        self._conn = conn_or_config
+        self._creds = creds
+
+    @property
+    def _url(self) -> str:
+        if hasattr(self._conn, "get"):
+            url = self._conn.get("connection_url", "") or self._conn.get("url", "")
+        else:
+            url = getattr(self._conn, "connection_url", None) or getattr(self._conn, "url", "")
+        return (url or "").rstrip("/")
+
+    def _creds_dict(self) -> dict:
+        if isinstance(self._creds, dict):
+            return self._creds
+        if hasattr(self._creds, "model_dump"):
+            return self._creds.model_dump()
+        return {}
+
+    async def ping(self) -> None:
+        if self._health_path is None:
+            raise NotImplementedError
+        async with httpx.AsyncClient(timeout=_PING_TIMEOUT) as client:
+            r = await client.get(f"{self._url}{self._health_path}")
+            r.raise_for_status()
+
+    async def preview(self, query: str, start: datetime | None, end: datetime | None, limit: int) -> list[dict]:
+        raise NotImplementedError
+
+    async def schema(self, start: datetime | None, end: datetime | None) -> tuple[dict[str, dict], int]:
+        if start is None:
+            end = datetime.now(timezone.utc)
+            start = end - timedelta(days=1)
+
+        delta = (end - start) / 5
+        tasks = [
+            self.preview("", start + delta * i, start + delta * (i + 1), limit=1)
+            for i in range(5)
+        ]
+        results_list = await asyncio.gather(*tasks, return_exceptions=True)
+
+        all_records: list[dict] = []
+        for res in results_list:
+            if isinstance(res, list):
+                all_records.extend(res)
+
+        return _infer_schema(all_records), len(all_records)
+
+
+# ── ClickHouse ────────────────────────────────────────────────────────────────
+
+class ClickHouseConnectionAdapter(BaseAdapter):
+    async def ping(self) -> None:
+        async with httpx.AsyncClient(timeout=_PING_TIMEOUT) as client:
+            r = await client.get(f"{self._url}/ping")
+            r.raise_for_status()
+
+    async def preview(self, query: str, start: datetime | None, end: datetime | None, limit: int) -> list[dict]:
+        creds = self._creds_dict()
+        user = creds.get("user", "")
+        password = creds.get("password", "")
+        database = creds.get("database", "default")
+        table = creds.get("table", "llogr_events")
+
+        conditions: list[str] = []
+        if query:
+            q_esc = query.replace("'", "\\'")
+            conditions.append(f"positionCaseInsensitive(toString(message), '{q_esc}') > 0")
+        if start:
+            conditions.append(f"timestamp >= parseDateTimeBestEffort('{start.isoformat()}')")
+        if end:
+            conditions.append(f"timestamp < parseDateTimeBestEffort('{end.isoformat()}')")
+
+        where = f" WHERE {' AND '.join(conditions)}" if conditions else ""
+        sql = f"SELECT * FROM {database}.{table}{where} LIMIT {limit} FORMAT JSONEachRow"
+
+        params: dict = {"query": sql}
+        if user:
+            params["user"] = user
+            params["password"] = password
+
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            r = await client.get(self._url + "/", params=params)
+            r.raise_for_status()
+
+        results: list[dict] = []
+        for line in r.text.strip().splitlines():
+            line = line.strip()
+            if line:
+                try:
+                    results.append(json.loads(line))
+                except json.JSONDecodeError:
+                    pass
+        return results
+
+    async def schema(self, start: datetime | None, end: datetime | None) -> tuple[dict[str, dict], int]:
+        return await super().schema(start, end)
+
+
+# ── Trino ─────────────────────────────────────────────────────────────────────
+
+class TrinoConnectionAdapter(BaseAdapter):
+    _health_path = "/v1/info"
+
+    async def preview(self, query: str, start: datetime | None, end: datetime | None, limit: int) -> list[dict]:
+        creds = self._creds_dict()
+        user = creds.get("user", "trino")
+        catalog = creds.get("catalog", "")
+        schema_name = creds.get("schema_name", "")
+
+        conditions: list[str] = []
+        if query:
+            q_esc = query.replace("'", "''")
+            conditions.append(f"CAST(message AS VARCHAR) LIKE '%{q_esc}%'")
+        if start:
+            conditions.append(f"timestamp >= TIMESTAMP '{start.strftime('%Y-%m-%d %H:%M:%S')}'")
+        if end:
+            conditions.append(f"timestamp < TIMESTAMP '{end.strftime('%Y-%m-%d %H:%M:%S')}'")
+
+        table = f"{catalog}.{schema_name}.events" if catalog and schema_name else "events"
+        where = f" WHERE {' AND '.join(conditions)}" if conditions else ""
+        sql = f"SELECT * FROM {table}{where} LIMIT {limit}"
+
+        headers = {"X-Trino-User": user, "Content-Type": "text/plain"}
+        results: list[dict] = []
+
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            r = await client.post(f"{self._url}/v1/statement", content=sql, headers=headers)
+            r.raise_for_status()
+            data = r.json()
+
+            columns = [col["name"] for col in data.get("columns", [])]
+            for row in data.get("data", []):
+                results.append(dict(zip(columns, row)))
+
+            next_uri = data.get("nextUri")
+            while next_uri and len(results) < limit:
+                r = await client.get(next_uri)
+                r.raise_for_status()
+                data = r.json()
+                if not columns:
+                    columns = [col["name"] for col in data.get("columns", [])]
+                for row in data.get("data", []):
+                    results.append(dict(zip(columns, row)))
+                if data.get("stats", {}).get("state") in ("FINISHED", "FAILED"):
+                    break
+                next_uri = data.get("nextUri")
+
+        return results[:limit]
+
+    async def schema(self, start: datetime | None, end: datetime | None) -> tuple[dict[str, dict], int]:
+        return await super().schema(start, end)
+
+
+# ── Langfuse ──────────────────────────────────────────────────────────────────
+
+class LangfuseConnectionAdapter(BaseAdapter):
+    async def ping(self) -> None:
+        async with httpx.AsyncClient(timeout=_PING_TIMEOUT) as client:
+            r = await client.get(f"{self._url}/api/public/health")
+            r.raise_for_status()
+
+    async def preview(self, query: str, start: datetime | None, end: datetime | None, limit: int) -> list[dict]:
+        creds = self._creds_dict()
+        public_key = creds.get("public_key", "")
+        secret_key = creds.get("secret_key", "")
+
+        params: dict = {"limit": limit}
+        if query:
+            params["name"] = query
+        if start:
+            params["fromTimestamp"] = start.isoformat()
+        if end:
+            params["toTimestamp"] = end.isoformat()
+
+        auth = (public_key, secret_key) if public_key else None
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            r = await client.get(f"{self._url}/api/public/traces", params=params, auth=auth)
+            r.raise_for_status()
+            data = r.json()
+            return data.get("data", [])
+
+    async def schema(self, start: datetime | None, end: datetime | None) -> tuple[dict[str, dict], int]:
+        return await super().schema(start, end)
+
+
+# ── Dataset sink ──────────────────────────────────────────────────────────────
+
+class DatasetSinkConnectionAdapter(BaseAdapter):
+    async def ping(self) -> None:
+        async with httpx.AsyncClient(timeout=_PING_TIMEOUT) as client:
+            r = await client.get(f"{self._url}/health")
+            r.raise_for_status()
+
+    async def preview(self, query: str, start: datetime | None, end: datetime | None, limit: int) -> list[dict]:
+        raise NotImplementedError("preview not supported for sink connections")
+
+    async def schema(self, start: datetime | None, end: datetime | None) -> dict[str, dict]:
+        raise NotImplementedError("schema not supported for sink connections")
+
+
+# ── S3 ────────────────────────────────────────────────────────────────────────
+
+class S3ConnectionAdapter(BaseAdapter):
+    async def ping(self) -> None:
+        import aioboto3
+        creds = self._creds_dict()
+        bucket = creds.get("bucket", "") or getattr(self._conn, "bucket", "")
+        endpoint = getattr(self._conn, "endpoint", "") or getattr(self._conn, "connection_url", "") or creds.get("endpoint", "")
+        region = creds.get("region", None) or getattr(self._conn, "region", "us-east-1")
+
+        async def _head():
+            session = aioboto3.Session()
+            kwargs: dict = {
+                "region_name": region,
+                "aws_access_key_id": creds.get("access_key_id", ""),
+                "aws_secret_access_key": creds.get("secret_access_key", ""),
+            }
+            if endpoint:
+                kwargs["endpoint_url"] = endpoint
+            async with session.client("s3", **kwargs) as s3:
+                await s3.head_bucket(Bucket=bucket)
+
+        await asyncio.wait_for(_head(), timeout=_PING_TIMEOUT)
+
+    async def preview(self, query: str, start: datetime | None, end: datetime | None, limit: int) -> list[dict]:
+        creds = self._creds_dict()
+        bucket = creds.get("bucket", "") or getattr(self._conn, "bucket", "")
+        key_prefix = creds.get("key_prefix", "") or getattr(self._conn, "key_prefix", "")
+        access_key = creds.get("access_key_id", "")
+        secret_key = creds.get("secret_access_key", "")
+        region = creds.get("region", "us-east-1")
+        endpoint = creds.get("endpoint", "") or getattr(self._conn, "endpoint", "")
+
+        def _scan() -> list[dict]:
+            import duckdb
+            con = duckdb.connect()
+            try:
+                con.execute("INSTALL httpfs; LOAD httpfs;")
+            except Exception:
+                pass
+            if access_key:
+                con.execute(f"SET s3_access_key_id='{access_key}';")
+                con.execute(f"SET s3_secret_access_key='{secret_key}';")
+            con.execute(f"SET s3_region='{region}';")
+            if endpoint:
+                host = endpoint.rstrip("/").split("://")[-1]
+                con.execute(f"SET s3_endpoint='{host}';")
+                con.execute("SET s3_use_ssl=false;")
+
+            prefix = key_prefix.rstrip("/") + "/" if key_prefix else ""
+            for fmt, reader in (
+                ("parquet", "read_parquet"),
+                ("json", "read_json_auto"),
+                ("csv", "read_csv_auto"),
+            ):
+                path = f"s3://{bucket}/{prefix}*.{fmt}"
+                try:
+                    rows = con.execute(f"SELECT * FROM {reader}('{path}') LIMIT {limit}").fetchall()
+                    cols = [d[0] for d in (con.description or [])]
+                    return [dict(zip(cols, row)) for row in rows]
+                except Exception:
+                    continue
+            return []
+
+        return await asyncio.to_thread(_scan)
+
+    async def schema(self, start: datetime | None, end: datetime | None) -> tuple[dict[str, dict], int]:
+        records = await self.preview("", start, end, limit=20)
+        return _infer_schema(records), len(records)
+
+
+# ── Registry and factory ──────────────────────────────────────────────────────
+
+_REGISTRY: dict[str, type[BaseAdapter]] = {
+    "clickhouse": ClickHouseConnectionAdapter,
+    "trino": TrinoConnectionAdapter,
+    "langfuse": LangfuseConnectionAdapter,
+    "dataset": DatasetSinkConnectionAdapter,
+    "s3": S3ConnectionAdapter,
+}
+
+
+def get_adapter(conn_or_config, creds) -> ConnectionAdapter:
+    """Single dispatch point. Registry lookup only — no type-branch logic here."""
+    source_type = (
+        conn_or_config.get("type")
+        if hasattr(conn_or_config, "get")
+        else getattr(conn_or_config, "type", None)
+    )
+    cls = _REGISTRY.get(source_type)
+    if cls is None:
+        raise ValueError(f"Unknown connection type: {source_type!r}")
+    return cls(conn_or_config, creds)

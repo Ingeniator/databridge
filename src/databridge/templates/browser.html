@@ -1,0 +1,189 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>databridge</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined" rel="stylesheet" />
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="stylesheet" href="/static/browser.css" />
+</head>
+<body class="bg-gray-50 min-h-screen font-inter" data-base="">
+
+<!-- Nav bar -->
+<nav class="bg-white border-b border-gray-200 px-6 py-4 flex items-center justify-between shadow-sm">
+  <div class="flex items-center gap-3">
+    <span class="material-symbols-outlined text-indigo-600 text-2xl">cable</span>
+    <h1 id="page-title" class="text-xl font-semibold text-gray-900">databridge</h1>
+  </div>
+  <button id="add-connection-btn"
+    class="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors"
+    data-testid="add-connection-btn">
+    <span class="material-symbols-outlined text-base">add</span>
+    Add Connection
+  </button>
+</nav>
+
+<main class="max-w-6xl mx-auto px-6 py-8">
+
+  <!-- Error / success toasts -->
+  <div id="error-toast" class="hidden fixed top-4 right-4 z-50 bg-red-600 text-white px-5 py-3 rounded-lg shadow-lg flex items-center gap-2 max-w-sm"
+       data-testid="error-toast">
+    <span class="material-symbols-outlined text-base">error</span>
+    <span id="error-toast-msg"></span>
+    <button onclick="document.getElementById('error-toast').classList.add('hidden')" class="ml-2 opacity-70 hover:opacity-100">✕</button>
+  </div>
+  <div id="success-toast" class="hidden fixed top-4 right-4 z-50 bg-green-600 text-white px-5 py-3 rounded-lg shadow-lg flex items-center gap-2 max-w-sm"
+       data-testid="success-toast">
+    <span class="material-symbols-outlined text-base">check_circle</span>
+    <span id="success-toast-msg"></span>
+    <button onclick="document.getElementById('success-toast').classList.add('hidden')" class="ml-2 opacity-70 hover:opacity-100">✕</button>
+  </div>
+
+  <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+
+    <!-- Left column: connections lists -->
+    <div class="lg:col-span-2 space-y-6">
+
+      <!-- User connections -->
+      <section>
+        <h2 class="text-sm font-semibold text-gray-500 uppercase tracking-wider mb-3">My Connections</h2>
+        <div id="connections-list" class="space-y-3" data-testid="connections-list">
+          <!-- Cards injected by JS -->
+        </div>
+        <div id="empty-state" class="hidden text-center py-12 text-gray-400" data-testid="empty-state">
+          <span class="material-symbols-outlined text-5xl mb-3 block">cable</span>
+          <p class="text-sm">No connections yet. Click <strong>Add Connection</strong> to get started.</p>
+        </div>
+      </section>
+
+      <!-- System sources -->
+      <section id="system-sources-section" class="hidden" data-testid="system-sources-section">
+        <h2 class="text-sm font-semibold text-gray-500 uppercase tracking-wider mb-3">System Sources</h2>
+        <div id="system-sources-list" class="space-y-3">
+          <!-- System source cards injected by JS -->
+        </div>
+      </section>
+
+    </div>
+
+    <!-- Right column: preview + schema panels -->
+    <div class="space-y-4">
+
+      <!-- Preview panel -->
+      <div id="preview-panel" class="bg-white rounded-xl border border-gray-200 p-5 shadow-sm" data-testid="preview-panel">
+        <h3 class="font-semibold text-gray-800 mb-4 flex items-center gap-2">
+          <span class="material-symbols-outlined text-indigo-500">preview</span>
+          Preview Data
+        </h3>
+        <div class="space-y-3">
+          <input id="preview-query-input" type="text" placeholder="Filter query (optional)"
+            class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400"
+            data-testid="preview-query-input" />
+          <input id="preview-start-input" type="datetime-local"
+            class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400"
+            data-testid="preview-start-input" />
+          <input id="preview-end-input" type="datetime-local"
+            class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400"
+            data-testid="preview-end-input" />
+          <button id="preview-submit-btn"
+            class="w-full bg-indigo-600 hover:bg-indigo-700 disabled:bg-gray-300 text-white py-2 rounded-lg text-sm font-medium transition-colors"
+            data-testid="preview-submit-btn" disabled>
+            Run Preview
+          </button>
+        </div>
+        <div class="mt-4 overflow-x-auto">
+          <table id="preview-table" class="w-full text-xs text-left hidden" data-testid="preview-table">
+            <thead id="preview-thead" class="bg-gray-50 text-gray-600"></thead>
+            <tbody id="preview-tbody" class="divide-y divide-gray-100"></tbody>
+          </table>
+          <p id="preview-empty-msg" class="text-xs text-gray-400 mt-2 hidden">No results.</p>
+        </div>
+      </div>
+
+      <!-- Schema panel -->
+      <div id="schema-panel" class="bg-white rounded-xl border border-gray-200 p-5 shadow-sm" data-testid="schema-panel">
+        <h3 class="font-semibold text-gray-800 mb-4 flex items-center gap-2">
+          <span class="material-symbols-outlined text-indigo-500">schema</span>
+          Schema
+        </h3>
+        <button id="schema-discover-btn"
+          class="w-full bg-gray-100 hover:bg-gray-200 disabled:bg-gray-50 text-gray-700 py-2 rounded-lg text-sm font-medium transition-colors mb-3"
+          data-testid="schema-discover-btn" disabled>
+          Discover Schema
+        </button>
+        <div id="schema-fields" class="overflow-y-auto max-h-64" data-testid="schema-fields">
+          <!-- Field rows injected by JS -->
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+</main>
+
+<!-- Add / Edit connection modal -->
+<div id="conn-modal" class="hidden fixed inset-0 z-40 flex items-center justify-center bg-black/40 backdrop-blur-sm">
+  <div class="bg-white rounded-2xl shadow-2xl w-full max-w-lg mx-4 overflow-hidden">
+    <div class="flex items-center justify-between px-6 py-4 border-b border-gray-100">
+      <h2 id="modal-title" class="text-lg font-semibold text-gray-900">Add Connection</h2>
+      <button onclick="window.DB.closeModal()" class="text-gray-400 hover:text-gray-600">
+        <span class="material-symbols-outlined">close</span>
+      </button>
+    </div>
+    <form id="conn-form" class="px-6 py-5 space-y-4" onsubmit="return false">
+      <div>
+        <label class="text-xs font-medium text-gray-600 block mb-1">Label</label>
+        <input id="conn-label-input" type="text" maxlength="120" required
+          class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400"
+          data-testid="conn-label-input" placeholder="My ClickHouse" />
+      </div>
+      <div class="grid grid-cols-2 gap-3">
+        <div>
+          <label class="text-xs font-medium text-gray-600 block mb-1">Type</label>
+          <select id="conn-type-select"
+            class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400"
+            data-testid="conn-type-select" onchange="window.DB.updateCredFields()">
+          </select>
+        </div>
+        <div>
+          <label class="text-xs font-medium text-gray-600 block mb-1">Role</label>
+          <select id="conn-role-select"
+            class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400"
+            data-testid="conn-role-select">
+            <option value="source">source</option>
+            <option value="sink">sink</option>
+          </select>
+        </div>
+      </div>
+      <div>
+        <label class="text-xs font-medium text-gray-600 block mb-1">Connection URL</label>
+        <input id="conn-url-input" type="url" required
+          class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400"
+          data-testid="conn-url-input" placeholder="http://host:port" />
+      </div>
+      <div id="cred-fields" class="space-y-3">
+        <!-- Credential fields injected by JS based on type -->
+      </div>
+      <div class="flex gap-3 pt-2">
+        <button type="button" id="conn-test-btn"
+          class="flex-1 border border-indigo-300 text-indigo-600 hover:bg-indigo-50 py-2 rounded-lg text-sm font-medium transition-colors"
+          data-testid="conn-test-btn" onclick="window.DB.testConnection()">
+          Test
+        </button>
+        <button type="submit" id="conn-submit-btn"
+          class="flex-1 bg-indigo-600 hover:bg-indigo-700 text-white py-2 rounded-lg text-sm font-medium transition-colors"
+          data-testid="conn-submit-btn" onclick="window.DB.submitConnection()">
+          Save
+        </button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<script src="/static/browser.js"></script>
+</body>
+</html>

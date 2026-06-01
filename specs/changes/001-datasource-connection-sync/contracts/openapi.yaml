@@ -1,0 +1,857 @@
+openapi: "3.1.0"
+info:
+  title: databridge API
+  version: "1.0.0"
+  description: >
+    Connection management service for syncing datasources to datasinks.
+    Phase 1: CRUD for connections + health check, data preview, and schema discovery.
+
+servers:
+  - url: http://localhost:5010
+    description: Local development
+
+tags:
+  - name: connections
+    description: Manage saved connections (sources and sinks)
+  - name: health
+    description: Service health probes
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Security
+# ─────────────────────────────────────────────────────────────────────────────
+components:
+  securitySchemes:
+    groupId:
+      type: apiKey
+      in: header
+      name: X-Group-ID
+      description: Tenant key injected by nginx (primary auth)
+    basicAuth:
+      type: http
+      scheme: basic
+      description: Fallback for SDK / direct access
+
+  # ───────────────────────────────────────────────────────────────────────────
+  # Shared schemas
+  # ───────────────────────────────────────────────────────────────────────────
+  schemas:
+
+    # --- Credential payloads (write-only) ------------------------------------
+
+    S3Credentials:
+      type: object
+      required: [access_key_id, secret_access_key, bucket]
+      properties:
+        access_key_id:    { type: string }
+        secret_access_key:{ type: string }
+        bucket:           { type: string }
+        region:           { type: string, default: "us-east-1" }
+        key_prefix:       { type: string, default: "" }
+
+    ClickHouseCredentials:
+      type: object
+      required: [user, password]
+      properties:
+        user:     { type: string }
+        password: { type: string }
+        database: { type: string, default: "default" }
+        table:    { type: string, default: "llogr_events" }
+
+    TrinoCredentials:
+      type: object
+      required: [user, catalog, schema_name]
+      properties:
+        user:        { type: string }
+        password:    { type: string, default: "" }
+        catalog:     { type: string }
+        schema_name: { type: string }
+
+    LangfuseCredentials:
+      type: object
+      required: [public_key, secret_key]
+      properties:
+        public_key: { type: string }
+        secret_key: { type: string }
+
+    DatasetSinkCredentials:
+      type: object
+      properties:
+        api_token: { type: string, default: "" }
+
+    AnyCredentials:
+      oneOf:
+        - $ref: "#/components/schemas/S3Credentials"
+        - $ref: "#/components/schemas/ClickHouseCredentials"
+        - $ref: "#/components/schemas/TrinoCredentials"
+        - $ref: "#/components/schemas/LangfuseCredentials"
+        - $ref: "#/components/schemas/DatasetSinkCredentials"
+
+    # --- Connection request/response -----------------------------------------
+
+    ConnectionCreate:
+      type: object
+      required: [label, type, role, connection_url, credentials]
+      properties:
+        label:
+          type: string
+          minLength: 1
+          maxLength: 120
+          example: "Production ClickHouse"
+        type:
+          type: string
+          enum: [s3, clickhouse, trino, langfuse, dataset]
+        role:
+          type: string
+          enum: [source, sink]
+        connection_url:
+          type: string
+          example: "http://clickhouse:8123"
+        credentials:
+          $ref: "#/components/schemas/AnyCredentials"
+
+    ConnectionPatch:
+      type: object
+      properties:
+        label:
+          type: string
+          minLength: 1
+          maxLength: 120
+        credentials:
+          $ref: "#/components/schemas/AnyCredentials"
+
+    ConnectionResponse:
+      type: object
+      required: [id, label, type, role, connection_url, status, system]
+      properties:
+        id:
+          type: string
+          format: uuid
+          example: "3fa85f64-5717-4562-b3fc-2c963f66afa6"
+        label:
+          type: string
+          example: "Production ClickHouse"
+        type:
+          type: string
+          enum: [s3, clickhouse, trino, langfuse, dataset]
+        role:
+          type: string
+          enum: [source, sink]
+        connection_url:
+          type: string
+          example: "http://clickhouse:8123"
+        status:
+          type: string
+          enum: [untested, reachable, unreachable]
+        system:
+          type: boolean
+          description: >
+            True for system sources defined in config.yaml (read-only, no CRUD operations).
+            False for user-owned connections.
+          example: false
+        last_tested_at:
+          type: string
+          format: date-time
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+          nullable: true
+          description: "null for system sources (not stored in DB)"
+        updated_at:
+          type: string
+          format: date-time
+          nullable: true
+          description: "null for system sources"
+
+    ConnectionListResponse:
+      type: object
+      required: [items]
+      description: >
+        Contains both user-owned connections (system=false) and system sources (system=true).
+        User connections ordered by created_at DESC; system sources in config declaration order.
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/ConnectionResponse"
+
+    # --- Ping ----------------------------------------------------------------
+
+    PingResponse:
+      type: object
+      required: [status]
+      properties:
+        status:
+          type: string
+          enum: [reachable, unreachable]
+        latency_ms:
+          type: number
+          nullable: true
+          example: 42.7
+        error:
+          type: string
+          nullable: true
+          example: "connection refused"
+
+    # --- Preview -------------------------------------------------------------
+
+    PreviewRequest:
+      type: object
+      properties:
+        query:
+          type: string
+          default: ""
+        start:
+          type: string
+          format: date-time
+          nullable: true
+        end:
+          type: string
+          format: date-time
+          nullable: true
+        limit:
+          type: integer
+          minimum: 1
+          maximum: 200
+          default: 50
+
+    PreviewResponse:
+      type: object
+      required: [results, connection_id]
+      properties:
+        results:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+        connection_id:
+          type: string
+          format: uuid
+
+    # --- Schema --------------------------------------------------------------
+
+    SchemaField:
+      type: object
+      required: [type]
+      properties:
+        type:
+          type: string
+          enum: [bool, int, float, list, object, string]
+        example:
+          description: "Representative value; null for object/list types"
+
+    SchemaResponse:
+      type: object
+      required: [fields, sample_count, connection_id]
+      properties:
+        fields:
+          type: object
+          additionalProperties:
+            $ref: "#/components/schemas/SchemaField"
+          example:
+            "body.cost":  { type: float,  example: 0.012 }
+            "session_id": { type: string, example: "sess-1" }
+        sample_count:
+          type: integer
+          example: 5
+        connection_id:
+          type: string
+          format: uuid
+
+    # --- Errors --------------------------------------------------------------
+
+    ErrorResponse:
+      type: object
+      required: [detail]
+      properties:
+        detail:
+          type: string
+
+    # --- Health --------------------------------------------------------------
+
+    ComponentState:
+      type: string
+      enum: [ok, degraded, disabled]
+      description: "ok=healthy, degraded=unreachable/failing, disabled=not configured"
+
+    LivezResponse:
+      type: object
+      required: [status]
+      properties:
+        status: { type: string, enum: [ok] }
+
+    ReadyResponse:
+      type: object
+      required: [status, components]
+      properties:
+        status:
+          type: string
+          enum: [ok, degraded]
+        components:
+          type: object
+          additionalProperties:
+            $ref: "#/components/schemas/ComponentState"
+          example:
+            db: ok
+            prod-clickhouse: ok
+            prod-s3: degraded
+
+    HealthResponse:
+      type: object
+      required: [status, version, components]
+      properties:
+        status:
+          type: string
+          enum: [ok, degraded]
+        version:
+          type: string
+          example: "1.0.0"
+        components:
+          type: object
+          additionalProperties:
+            $ref: "#/components/schemas/ComponentState"
+        details:
+          type: object
+          additionalProperties: { type: string }
+          nullable: true
+          description: "Error messages for degraded components; null when all ok"
+          example:
+            prod-s3: "Connection refused (bucket: my-bucket)"
+
+    # --- UI config -----------------------------------------------------------
+
+    UiConfigResponse:
+      type: object
+      required: [connection_types, hide_auth_inputs]
+      properties:
+        connection_types:
+          type: array
+          items: { type: string }
+          example: [s3, clickhouse, trino, langfuse, dataset]
+        hide_auth_inputs:
+          type: boolean
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Paths
+# ─────────────────────────────────────────────────────────────────────────────
+security:
+  - groupId: []
+  - basicAuth: []
+
+paths:
+
+  # ── Health ────────────────────────────────────────────────────────────────
+
+  /livez:
+    get:
+      tags: [health]
+      summary: Liveness probe — always 200, never checks dependencies
+      security: []
+      responses:
+        "200":
+          description: Service process is alive
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LivezResponse"
+              example: { status: ok }
+
+  /ready:
+    get:
+      tags: [health]
+      summary: Readiness probe — checks all enabled components concurrently
+      description: >
+        Returns 200 when all enabled components are `ok`.
+        Returns 503 when any component is `degraded`.
+        `disabled` components are excluded from the status determination.
+      security: []
+      responses:
+        "200":
+          description: All components healthy
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReadyResponse"
+              example:
+                status: ok
+                components:
+                  db: ok
+                  prod-clickhouse: ok
+        "503":
+          description: One or more components degraded
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReadyResponse"
+              example:
+                status: degraded
+                components:
+                  db: ok
+                  prod-s3: degraded
+
+  /api/v1/health:
+    get:
+      tags: [health]
+      summary: Detailed health — same as /ready plus version and error details
+      description: >
+        Used by dashboards and monitoring tools, not k8s probes.
+        `details` is omitted (null) when all components are healthy.
+      responses:
+        "200":
+          description: Health details
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthResponse"
+              example:
+                status: degraded
+                version: "1.0.0"
+                components:
+                  db: ok
+                  prod-s3: degraded
+                details:
+                  prod-s3: "Connection refused (bucket: llogr-raw)"
+
+  # ── UI config ────────────────────────────────────────────────────────────
+
+  /api/v1/ui-config:
+    get:
+      summary: UI bootstrap configuration
+      responses:
+        "200":
+          description: Config for SPA initialisation
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UiConfigResponse"
+              example:
+                connection_types: [s3, clickhouse, trino, langfuse, dataset]
+                hide_auth_inputs: true
+
+  # ── Connections ──────────────────────────────────────────────────────────
+
+  /api/v1/connections:
+    get:
+      tags: [connections]
+      summary: List all connections owned by the caller
+      responses:
+        "200":
+          description: Connection list (no credentials)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ConnectionListResponse"
+              example:
+                items:
+                  - id: "3fa85f64-5717-4562-b3fc-2c963f66afa6"
+                    label: "Production ClickHouse"
+                    type: "clickhouse"
+                    role: "source"
+                    connection_url: "http://clickhouse:8123"
+                    status: "reachable"
+                    last_tested_at: "2026-06-01T10:00:00Z"
+                    created_at: "2026-06-01T09:00:00Z"
+                    updated_at: "2026-06-01T10:00:00Z"
+        "401":
+          description: Missing or invalid auth
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example: { detail: "authentication required" }
+
+    post:
+      tags: [connections]
+      summary: Create a new connection
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ConnectionCreate"
+            examples:
+              clickhouse:
+                summary: ClickHouse source
+                value:
+                  label: "Production ClickHouse"
+                  type: "clickhouse"
+                  role: "source"
+                  connection_url: "http://clickhouse:8123"
+                  credentials:
+                    user: "default"
+                    password: "s3cr3t"
+                    database: "logs"
+              dataset_sink:
+                summary: Dataset sink
+                value:
+                  label: "Annotator Dataset Service"
+                  type: "dataset"
+                  role: "sink"
+                  connection_url: "http://annotator-mock:8010"
+                  credentials:
+                    api_token: ""
+      responses:
+        "201":
+          description: Connection created (no credentials in response)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ConnectionResponse"
+              example:
+                id: "3fa85f64-5717-4562-b3fc-2c963f66afa6"
+                label: "Production ClickHouse"
+                type: "clickhouse"
+                role: "source"
+                connection_url: "http://clickhouse:8123"
+                status: "untested"
+                last_tested_at: null
+                created_at: "2026-06-01T09:00:00Z"
+                updated_at: "2026-06-01T09:00:00Z"
+        "400":
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example: { detail: "label must not be empty" }
+        "401":
+          description: Missing or invalid auth
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /api/v1/connections/test:
+    post:
+      tags: [connections]
+      summary: Test a connection without saving it
+      description: >
+        Builds a transient adapter from the supplied credentials and calls `ping()`.
+        Nothing is persisted — use this for the "Test before saving" UI flow.
+        Same credential shapes as `POST /api/v1/connections`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [type, connection_url, credentials]
+              properties:
+                type:
+                  type: string
+                  enum: [s3, clickhouse, trino, langfuse, dataset]
+                connection_url:
+                  type: string
+                  example: "http://clickhouse:8123"
+                credentials:
+                  $ref: "#/components/schemas/AnyCredentials"
+            examples:
+              clickhouse:
+                summary: Test ClickHouse credentials
+                value:
+                  type: "clickhouse"
+                  connection_url: "http://clickhouse:8123"
+                  credentials: { user: "default", password: "s3cr3t" }
+      responses:
+        "200":
+          description: Ping result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PingResponse"
+              examples:
+                reachable:
+                  value: { status: reachable, latency_ms: 38.1 }
+                unreachable:
+                  value: { status: unreachable, error: "connection refused" }
+        "400":
+          description: Unsupported type or missing required field
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          description: Missing or invalid auth
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /api/v1/connections/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+
+    get:
+      tags: [connections]
+      summary: Get a single connection by ID
+      responses:
+        "200":
+          description: Connection details (no credentials)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ConnectionResponse"
+        "401":
+          description: Missing or invalid auth
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Not found or not owned by caller
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example: { detail: "connection not found" }
+
+    patch:
+      tags: [connections]
+      summary: Update label or credentials
+      description: >
+        Omitted fields are unchanged.
+        Updating credentials resets `status` to `untested` and clears `last_tested_at`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ConnectionPatch"
+            examples:
+              rename:
+                summary: Rename only
+                value: { label: "CH prod v2" }
+              update_creds:
+                summary: New password
+                value:
+                  credentials:
+                    user: "default"
+                    password: "newpassword"
+      responses:
+        "200":
+          description: Updated connection (no credentials)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ConnectionResponse"
+        "400":
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          description: Missing or invalid auth
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Not found or not owned by caller
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+    delete:
+      tags: [connections]
+      summary: Delete a connection permanently
+      description: >
+        Deletes the connection and its encrypted credentials.
+        Returns 409 if any sync jobs reference this connection (Phase 2).
+      responses:
+        "204":
+          description: Deleted successfully
+        "401":
+          description: Missing or invalid auth
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Not found or not owned by caller
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "409":
+          description: Connection is referenced by one or more sync jobs
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example: { detail: "connection is used by 2 sync job(s)" }
+
+  /api/v1/connections/{id}/ping:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    post:
+      tags: [connections]
+      summary: Test backend reachability using stored credentials
+      description: >
+        Decrypts stored credentials, builds a transient adapter, and calls `adapter.ping()`.
+        Updates `status` and `last_tested_at` in the DB regardless of outcome.
+      responses:
+        "200":
+          description: Ping result (reachable or unreachable)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PingResponse"
+              examples:
+                reachable:
+                  value: { status: reachable, latency_ms: 42.7 }
+                unreachable:
+                  value: { status: unreachable, error: "connection refused" }
+        "401":
+          description: Missing or invalid auth
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Not found or not owned by caller
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /api/v1/connections/{id}/preview:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    post:
+      tags: [connections]
+      summary: Preview data from a source connection
+      description: >
+        Only valid for `role=source` connections.
+        Returns up to `limit` records matching the query and time range.
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PreviewRequest"
+            example:
+              query: "error"
+              start: "2026-05-01T00:00:00Z"
+              end: "2026-06-01T00:00:00Z"
+              limit: 50
+      responses:
+        "200":
+          description: Preview records
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PreviewResponse"
+              example:
+                connection_id: "3fa85f64-5717-4562-b3fc-2c963f66afa6"
+                results:
+                  - { session_id: "sess-1", body.cost: 0.01, timestamp: "2026-05-31T12:00:00Z" }
+        "400":
+          description: Preview not supported for sink connections
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example: { detail: "preview is only available for source connections" }
+        "401":
+          description: Missing or invalid auth
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Not found or not owned by caller
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "502":
+          description: Backend unreachable during preview
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example: { detail: "backend returned 503" }
+
+  /api/v1/connections/{id}/schema:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    get:
+      tags: [connections]
+      summary: Discover field schema from a source connection
+      description: >
+        Samples a small number of records (time-bucketed if start/end provided)
+        and infers field names, types, and example values.
+        Only valid for `role=source` connections.
+      parameters:
+        - name: start
+          in: query
+          schema:
+            type: string
+            format: date-time
+        - name: end
+          in: query
+          schema:
+            type: string
+            format: date-time
+      responses:
+        "200":
+          description: Discovered schema
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SchemaResponse"
+              example:
+                connection_id: "3fa85f64-5717-4562-b3fc-2c963f66afa6"
+                sample_count: 5
+                fields:
+                  "body.cost":  { type: float,  example: 0.012 }
+                  "session_id": { type: string, example: "sess-1" }
+                  "timestamp":  { type: string, example: "2026-05-31T12:00:00Z" }
+        "400":
+          description: Schema discovery not supported for sink connections
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example: { detail: "schema discovery is only available for source connections" }
+        "401":
+          description: Missing or invalid auth
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Not found or not owned by caller
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "502":
+          description: Backend unreachable during schema discovery
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"

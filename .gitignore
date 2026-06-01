@@ -1,0 +1,38 @@
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+dist/
+*.egg-info/
+.eggs/
+build/
+
+# Test & coverage
+.pytest_cache/
+.coverage
+htmlcov/
+.mypy_cache/
+.ruff_cache/
+
+# Alembic (migrations are committed to version control — do NOT exclude them)
+
+# Config (contains secrets — never commit)
+config.yaml
+config.dev.yaml
+
+# Prometheus multiprocess
+/tmp/prometheus_multiproc/
+
+# DuckDB temp
+/tmp/duckdb_temp/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editors
+.vscode/
+.idea/
+*.swp
+*.swo

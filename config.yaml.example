@@ -1,0 +1,63 @@
+# databridge configuration
+#
+# Two environment variables are supported (both optional):
+#   DATABRIDGE_CONFIG     - absolute path to this config file (default: config.yaml in cwd)
+#   VAULT_SECRETS_PATH    - path to vault sidecar file (default: /vault/secrets/env)
+#
+# Secret injection (applied before YAML parsing):
+#   vault:KEYNAME         - replaced from VAULT_SECRETS_PATH sidecar file
+#   $VAR / ${VAR}         - replaced via os.path.expandvars (process environment)
+
+server:
+  host: "0.0.0.0"
+  port: 5010
+  workers: 1
+  root_path: ""            # ASGI root_path for reverse-proxy prefix stripping
+  debug: false
+  silence_probes: true     # suppress /livez /ready /health /metrics from access logs
+  hide_auth_inputs: false  # set true when nginx injects X-Group-ID (users don't enter credentials)
+
+# PostgreSQL connection string — use vault or $VAR for the password
+database_url: "postgresql://postgres:${DB_PASSWORD}@localhost:5432/databridge"
+
+# Fernet encryption key for user credentials stored in the database
+# Generate: python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+encryption_key: "vault:DATABRIDGE_ENCRYPTION_KEY"
+
+# System datasources — admin-configured, visible to all users as read-only sources
+# Supported types: s3, clickhouse, trino, langfuse
+datasources: []
+  # ── ClickHouse example ──────────────────────────────────────────────────────
+  # - name: "prod-clickhouse"
+  #   type: clickhouse
+  #   url: "http://clickhouse:8123"
+  #   database: "default"
+  #   table: "llogr_events"
+  #   user: "default"
+  #   password: "vault:CH_PASSWORD"
+  #
+  # ── S3 / MinIO example ──────────────────────────────────────────────────────
+  # - name: "prod-s3"
+  #   type: s3
+  #   endpoint: "http://minio:9000"   # omit for AWS S3
+  #   bucket: "llogr-raw-events"
+  #   region: "us-east-1"
+  #   access_key_id: "vault:S3_KEY"
+  #   secret_access_key: "vault:S3_SECRET"
+  #   addressing_style: "path"        # "path" for MinIO/Ceph, "virtual" for AWS
+  #   key_prefix: ""
+  #
+  # ── Trino example ───────────────────────────────────────────────────────────
+  # - name: "prod-trino"
+  #   type: trino
+  #   url: "http://trino:8080"
+  #   user: "trino"
+  #   catalog: "hive"
+  #   schema_name: "events"
+  #
+  # ── Langfuse example ────────────────────────────────────────────────────────
+  # - name: "prod-langfuse"
+  #   type: langfuse
+  #   url: "http://langfuse:3000"
+  #   access_key_id: "vault:LF_PUBLIC_KEY"
+  #   secret_access_key: "vault:LF_SECRET_KEY"
