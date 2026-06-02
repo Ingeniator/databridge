@@ -273,7 +273,22 @@ async def schema_connection(
     end: datetime | None = None,
     auth: AuthContext = Depends(get_auth),
     pool: asyncpg.Pool = Depends(get_pool),
+    system_sources: list[SystemSourceConfig] = Depends(get_system_sources),
 ) -> SchemaResponse:
+    for src in system_sources:
+        if src.id == id:
+            creds = {f: getattr(src, f) for f in src.__dataclass_fields__ if f not in ("name", "type")}
+            adapter = get_adapter(src, creds)
+            try:
+                fields_raw, sample_count = await adapter.schema(start, end)
+            except NotImplementedError:
+                raise HTTPException(status_code=501, detail="schema discovery not yet implemented for this backend")
+            except Exception as exc:
+                raise HTTPException(status_code=502, detail=str(exc))
+            from databridge.models import SchemaField
+            fields = {k: SchemaField(**v) if isinstance(v, dict) else v for k, v in fields_raw.items()}
+            return SchemaResponse(fields=fields, sample_count=sample_count, connection_id=id)
+
     row = await get_connection(pool, id=id, owner_key=auth.public_key)
     if row is None:
         raise HTTPException(status_code=404, detail="connection not found")

@@ -1,0 +1,741 @@
+openapi: "3.1.0"
+
+info:
+  title: "databridge — Datasink Export Pipeline"
+  version: "0.2.0"
+  description: |
+    New endpoints introduced by the Datasink Export Pipeline feature (002-datasink-export).
+    Extends the base databridge API (see specs/current/openapi.yaml).
+
+servers:
+  - url: "http://localhost:5010"
+    description: "Local development"
+
+# ── Security ─────────────────────────────────────────────────────────────────
+
+security:
+  - GroupIDHeader: []
+  - BasicAuth: []
+
+components:
+  securitySchemes:
+    GroupIDHeader:
+      type: apiKey
+      in: header
+      name: X-Group-ID
+      description: "Format: org_id/user_id (set by upstream nginx gateway)"
+    BasicAuth:
+      type: http
+      scheme: basic
+
+  # ── Reusable schemas ───────────────────────────────────────────────────────
+
+  schemas:
+
+    FilterSnapshot:
+      type: object
+      description: "Datasource filter captured at export creation time"
+      properties:
+        query:
+          type: string
+          default: ""
+        start:
+          type: string
+          format: date-time
+          nullable: true
+          default: null
+        end:
+          type: string
+          format: date-time
+          nullable: true
+          default: null
+
+    ExportJobStatus:
+      type: string
+      enum: [pending, running, completed, failed]
+
+    ExportJobResponse:
+      type: object
+      required:
+        - id
+        - org_id
+        - user_id
+        - datasource_type
+        - datasource_ref
+        - datasource_filter
+        - datasink_name
+        - destination_dataset
+        - asset_resolution
+        - asset_url_fields
+        - asset_url_prefix
+        - status
+        - records_processed
+        - records_skipped
+        - asset_errors
+        - created_at
+      properties:
+        id:
+          type: string
+          format: uuid
+        org_id:
+          type: string
+        user_id:
+          type: string
+        datasource_type:
+          type: string
+          enum: [connection, system]
+        datasource_ref:
+          type: string
+          description: "UUID for user connections; config name for system sources"
+        datasource_filter:
+          $ref: "#/components/schemas/FilterSnapshot"
+        datasink_name:
+          type: string
+        destination_dataset:
+          type: string
+        asset_resolution:
+          type: boolean
+        asset_url_fields:
+          type: array
+          items:
+            type: string
+        asset_url_prefix:
+          type: string
+        asset_datasink_name:
+          type: string
+          nullable: true
+        asset_dataset:
+          type: string
+          nullable: true
+          description: "Auto-derived: {destination_dataset}_assets"
+        status:
+          $ref: "#/components/schemas/ExportJobStatus"
+        records_total:
+          type: integer
+          nullable: true
+          description: "Null until the worker starts processing"
+        records_processed:
+          type: integer
+        records_skipped:
+          type: integer
+        asset_errors:
+          type: integer
+          description: "Records skipped due to asset fetch failure"
+        error_message:
+          type: string
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+        started_at:
+          type: string
+          format: date-time
+          nullable: true
+        completed_at:
+          type: string
+          format: date-time
+          nullable: true
+
+    ExportJobCreate:
+      type: object
+      required:
+        - datasource_type
+        - datasource_ref
+        - datasink_name
+        - destination_dataset
+      properties:
+        datasource_type:
+          type: string
+          enum: [connection, system]
+        datasource_ref:
+          type: string
+          description: "UUID string for user connections; config name for system sources"
+        datasource_filter:
+          $ref: "#/components/schemas/FilterSnapshot"
+          default: {}
+        datasink_name:
+          type: string
+          description: "Must match a datasink name defined in config.yaml"
+        destination_dataset:
+          type: string
+          minLength: 1
+          maxLength: 120
+        asset_resolution:
+          type: boolean
+          default: false
+        asset_url_fields:
+          type: array
+          items:
+            type: string
+          default: []
+        asset_url_prefix:
+          type: string
+          default: ""
+        asset_datasink_name:
+          type: string
+          nullable: true
+          default: null
+
+    ExportJobListResponse:
+      type: object
+      required: [items, total, page, page_size]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/ExportJobResponse"
+        total:
+          type: integer
+        page:
+          type: integer
+        page_size:
+          type: integer
+
+    DatasinkInfo:
+      type: object
+      required: [name, type]
+      properties:
+        name:
+          type: string
+        type:
+          type: string
+          enum: [dataset-mock, annotator-mock, local-zip, local-jsonl]
+
+    DatasinkListResponse:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/DatasinkInfo"
+
+    DatasinkDatasetListResponse:
+      type: object
+      required: [datasets]
+      properties:
+        datasets:
+          type: array
+          items:
+            type: string
+
+    AssetFieldDetectRequest:
+      type: object
+      description: "Either connection_id or system_source_name must be provided"
+      properties:
+        connection_id:
+          type: string
+          format: uuid
+          nullable: true
+        system_source_name:
+          type: string
+          nullable: true
+
+    AssetFieldDetectResponse:
+      type: object
+      required: [candidate_fields]
+      properties:
+        candidate_fields:
+          type: array
+          items:
+            type: string
+          description: "Field paths detected as likely asset URLs; pre-selected in UI"
+
+    ErrorResponse:
+      type: object
+      required: [detail]
+      properties:
+        detail:
+          type: string
+
+
+# ── Paths ─────────────────────────────────────────────────────────────────────
+
+paths:
+
+  # ── Datasink endpoints ─────────────────────────────────────────────────────
+
+  /api/v1/datasinks:
+    get:
+      operationId: list_datasinks
+      summary: "List all configured datasinks"
+      description: |
+        Returns all datasinks defined in the service config.yaml. Available to all authenticated
+        users (datasinks are global, administrator-configured).
+      tags: [datasinks]
+      responses:
+        "200":
+          description: "Datasink list"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DatasinkListResponse"
+              examples:
+                success:
+                  value:
+                    items:
+                      - name: "prod-dataset-mock"
+                        type: "dataset-mock"
+                      - name: "local-exports-zip"
+                        type: "local-zip"
+        "401":
+          description: "Authentication required"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                unauthorized:
+                  value:
+                    detail: "authentication required"
+
+  /api/v1/datasinks/{name}/datasets:
+    get:
+      operationId: list_datasink_datasets
+      summary: "List available datasets in a datasink"
+      description: |
+        Calls the datasink's list-datasets operation and returns available dataset names.
+        Used to populate the destination dataset selector in the UI.
+      tags: [datasinks]
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+          description: "Datasink config name"
+      responses:
+        "200":
+          description: "Dataset list"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DatasinkDatasetListResponse"
+              examples:
+                success:
+                  value:
+                    datasets: ["my-dataset", "prod-export-2026"]
+        "404":
+          description: "Datasink not found in config"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                not_found:
+                  value:
+                    detail: "datasink 'unknown-sink' not found"
+        "502":
+          description: "Datasink unreachable"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                unreachable:
+                  value:
+                    detail: "datasink unreachable: connection refused"
+        "401":
+          description: "Authentication required"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /api/v1/datasinks/{name}/detect-asset-fields:
+    post:
+      operationId: detect_asset_fields
+      summary: "Detect candidate asset URL fields from datasource schema"
+      description: |
+        Inspects the datasource schema and sample data to identify fields likely to contain
+        asset URLs (by name convention and URL pattern matching). Returns a candidate list
+        pre-selected for the user to review in the asset resolution configuration UI.
+      tags: [datasinks]
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AssetFieldDetectRequest"
+            examples:
+              connection:
+                value:
+                  connection_id: "550e8400-e29b-41d4-a716-446655440000"
+              system_source:
+                value:
+                  system_source_name: "prod-clickhouse"
+      responses:
+        "200":
+          description: "Candidate asset URL fields"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AssetFieldDetectResponse"
+              examples:
+                success:
+                  value:
+                    candidate_fields: ["file_url", "image_url", "trace.asset_url"]
+        "400":
+          description: "Neither connection_id nor system_source_name provided"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: "Connection or system source not found"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          description: "Authentication required"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  # ── Export job endpoints ───────────────────────────────────────────────────
+
+  /api/v1/export-jobs:
+    post:
+      operationId: create_export_job
+      summary: "Create and enqueue an export job"
+      description: |
+        Creates an export job record (status=pending), enqueues it for background processing,
+        and returns the job. Rejects if the org has already reached the concurrent job limit
+        (default: 5, configurable). The existing Data Preview (with active filter) serves as
+        the export preview — no separate preview is generated.
+      tags: [export-jobs]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ExportJobCreate"
+            examples:
+              basic_export:
+                summary: "Export to dataset-mock, no asset resolution"
+                value:
+                  datasource_type: "connection"
+                  datasource_ref: "550e8400-e29b-41d4-a716-446655440000"
+                  datasource_filter:
+                    query: "error"
+                    start: "2026-06-01T00:00:00Z"
+                    end: "2026-06-02T00:00:00Z"
+                  datasink_name: "prod-dataset-mock"
+                  destination_dataset: "june-errors"
+                  asset_resolution: false
+              with_asset_resolution:
+                summary: "Export with asset resolution enabled"
+                value:
+                  datasource_type: "system"
+                  datasource_ref: "prod-clickhouse"
+                  datasource_filter:
+                    query: ""
+                  datasink_name: "prod-dataset-mock"
+                  destination_dataset: "traces-export"
+                  asset_resolution: true
+                  asset_url_fields: ["file_url", "image_url"]
+                  asset_url_prefix: "https://storage.example.com/"
+                  asset_datasink_name: "prod-annotator-mock"
+      responses:
+        "201":
+          description: "Export job created and enqueued"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ExportJobResponse"
+              examples:
+                created:
+                  value:
+                    id: "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+                    org_id: "acme"
+                    user_id: "alice"
+                    datasource_type: "connection"
+                    datasource_ref: "550e8400-e29b-41d4-a716-446655440000"
+                    datasource_filter:
+                      query: "error"
+                      start: "2026-06-01T00:00:00Z"
+                      end: "2026-06-02T00:00:00Z"
+                    datasink_name: "prod-dataset-mock"
+                    destination_dataset: "june-errors"
+                    asset_resolution: false
+                    asset_url_fields: []
+                    asset_url_prefix: ""
+                    asset_datasink_name: null
+                    asset_dataset: null
+                    status: "pending"
+                    records_total: null
+                    records_processed: 0
+                    records_skipped: 0
+                    asset_errors: 0
+                    error_message: null
+                    created_at: "2026-06-02T10:30:00Z"
+                    started_at: null
+                    completed_at: null
+        "400":
+          description: "Invalid request (unknown datasink, missing fields)"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                unknown_sink:
+                  value:
+                    detail: "datasink 'unknown-sink' not found in configuration"
+        "429":
+          description: "Org concurrent job limit reached"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                limit_reached:
+                  value:
+                    detail: "concurrent job limit reached: org 'acme' already has 5 active jobs (limit=5)"
+        "401":
+          description: "Authentication required"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+    get:
+      operationId: list_export_jobs
+      summary: "List export jobs (role-filtered)"
+      description: |
+        Returns export jobs visible to the caller based on role:
+        - `user`: only the caller's own jobs (user_id match)
+        - `org_admin`: all jobs in the caller's org (org_id match)
+        - `super_admin`: all jobs across all orgs
+
+        Results are ordered by created_at descending (newest first) and paginated server-side.
+      tags: [export-jobs]
+      parameters:
+        - name: page
+          in: query
+          schema:
+            type: integer
+            default: 1
+            minimum: 1
+        - name: page_size
+          in: query
+          schema:
+            type: integer
+            default: 20
+            minimum: 1
+            maximum: 100
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [pending, running, completed, failed]
+          description: "Filter by status (optional)"
+      responses:
+        "200":
+          description: "Paginated export job list"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ExportJobListResponse"
+              examples:
+                list:
+                  value:
+                    items:
+                      - id: "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+                        org_id: "acme"
+                        user_id: "alice"
+                        datasource_type: "connection"
+                        datasource_ref: "550e8400-e29b-41d4-a716-446655440000"
+                        datasource_filter:
+                          query: "error"
+                        datasink_name: "prod-dataset-mock"
+                        destination_dataset: "june-errors"
+                        asset_resolution: false
+                        asset_url_fields: []
+                        asset_url_prefix: ""
+                        asset_datasink_name: null
+                        asset_dataset: null
+                        status: "completed"
+                        records_total: 1042
+                        records_processed: 1042
+                        records_skipped: 0
+                        asset_errors: 0
+                        error_message: null
+                        created_at: "2026-06-02T10:30:00Z"
+                        started_at: "2026-06-02T10:30:05Z"
+                        completed_at: "2026-06-02T10:31:12Z"
+                    total: 1
+                    page: 1
+                    page_size: 20
+        "401":
+          description: "Authentication required"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /api/v1/export-jobs/{id}:
+    get:
+      operationId: get_export_job
+      summary: "Get a single export job"
+      description: |
+        Returns the job if it is visible to the caller (same role rules as list endpoint).
+        Returns 404 if not found or not visible to the caller.
+      tags: [export-jobs]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: "Export job"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ExportJobResponse"
+        "404":
+          description: "Job not found or not visible to caller"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                not_found:
+                  value:
+                    detail: "export job not found"
+        "401":
+          description: "Authentication required"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /api/v1/export-jobs/{id}/retry:
+    post:
+      operationId: retry_export_job
+      summary: "Retry a failed export job"
+      description: |
+        Creates a new export job pre-filled with the failed job's settings
+        (datasource, filter, datasink, destination dataset, asset resolution config).
+        The original failed job is left unchanged. Only callable on jobs with status=failed
+        and only by a user who can see the original job (same role rules).
+        Returns 429 if the org concurrent job limit is already reached.
+      tags: [export-jobs]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              description: "Empty body; settings cloned from original job"
+      responses:
+        "201":
+          description: "New export job created from failed job's settings"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ExportJobResponse"
+        "400":
+          description: "Job is not in failed status"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                not_failed:
+                  value:
+                    detail: "can only retry jobs with status 'failed'; current status: 'running'"
+        "404":
+          description: "Job not found or not visible to caller"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "429":
+          description: "Org concurrent job limit reached"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          description: "Authentication required"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /api/v1/export-jobs/{id}/download:
+    get:
+      tags: [export-jobs]
+      summary: Download the output file for a completed local-sink job
+      operationId: download_export
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: "File download (application/zip or application/x-ndjson)"
+          content:
+            application/zip:
+              schema:
+                type: string
+                format: binary
+            application/x-ndjson:
+              schema:
+                type: string
+                format: binary
+        "400":
+          description: "Sink is not a local type (no file to download)"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: "Job not found, not visible, or output file missing from disk"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "409":
+          description: "Job is not completed yet"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                not_complete:
+                  value:
+                    detail: "job is running, not completed"
+        "401":
+          description: "Authentication required"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+tags:
+  - name: datasinks
+    description: "Datasink configuration and dataset enumeration"
+  - name: export-jobs
+    description: "Export job lifecycle — create, monitor, retry, download"

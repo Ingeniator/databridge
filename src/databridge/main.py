@@ -33,8 +33,23 @@ async def lifespan(app: FastAPI):
     setup_logging(debug=settings.server.debug, silence_probes=settings.server.silence_probes)
     logger.info("service_startup", version="0.1.0")
     app.state.pool = await create_pool()
+
+    # ARQ pool for enqueueing export jobs
+    try:
+        import arq
+        from arq.connections import RedisSettings
+        from databridge.routes.export_jobs import set_arq_pool
+        arq_pool = await arq.create_pool(RedisSettings.from_dsn(settings.export.redis_url))
+        app.state.arq_pool = arq_pool
+        set_arq_pool(arq_pool)
+    except Exception as exc:
+        logger.warning("arq_pool_unavailable", error=str(exc))
+        app.state.arq_pool = None
+
     yield
     await app.state.pool.close()
+    if hasattr(app.state, "arq_pool") and app.state.arq_pool is not None:
+        await app.state.arq_pool.aclose()
     logger.info("service_shutdown")
 
 
@@ -57,11 +72,15 @@ def create_app() -> FastAPI:
         return JSONResponse(status_code=500, content={"detail": "Internal server error"})
 
     from databridge.routes.connections import router as connections_router
+    from databridge.routes.datasinks import router as datasinks_router
+    from databridge.routes.export_jobs import router as export_jobs_router
     from databridge.routes.ui import router as ui_router, _STATIC_DIR
     from fastapi.staticfiles import StaticFiles
 
     app.include_router(health_router)
     app.include_router(connections_router)
+    app.include_router(datasinks_router)
+    app.include_router(export_jobs_router)
     app.include_router(ui_router)
     app.mount("/static", StaticFiles(directory=str(_STATIC_DIR)), name="static")
     app.add_route("/metrics", metrics_endpoint)

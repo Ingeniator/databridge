@@ -7,7 +7,9 @@
   let _connections = [];
   let _systemSources = [];
   let _activeId = null;      // connection ID selected for preview/schema
+  let _activeType = null;    // 'connection' | 'system'
   let _editingId = null;     // connection ID being edited (null = creating new)
+  let _jobsPollingTimer = null;
 
   // ── API helpers ──────────────────────────────────────────────────────────────
   const base = () => document.querySelector('[data-base]')?.dataset.base || '';
@@ -120,7 +122,7 @@
       <button id="conn-preview-btn-${id}"
         class="icon-btn text-teal-600 hover:bg-teal-50" title="Preview"
         data-testid="conn-preview-btn-${id}"
-        onclick="window.DB.selectConnection('${id}')">
+        onclick="window.DB.selectConnection('${id}', false)">
         <span class="material-symbols-outlined">preview</span>
       </button>
       <button id="conn-edit-btn-${id}"
@@ -165,7 +167,7 @@
       <button id="sys-preview-btn-${id}"
         class="icon-btn text-teal-600 hover:bg-teal-50" title="Preview"
         data-testid="sys-preview-btn-${id}"
-        onclick="window.DB.selectConnection('${id}')">
+        onclick="window.DB.selectConnection('${id}', true)">
         <span class="material-symbols-outlined">preview</span>
       </button>
     </div>
@@ -209,15 +211,269 @@
   }
 
   // ── Select connection for preview/schema ──────────────────────────────────────
-  function selectConnection(id) {
+  function selectConnection(id, isSystem) {
     _activeId = id;
+    _activeType = isSystem ? 'system' : 'connection';
     document.getElementById('preview-submit-btn').disabled = false;
     document.getElementById('schema-discover-btn').disabled = false;
     // Clear previous results
     document.getElementById('preview-table').classList.add('hidden');
     document.getElementById('preview-empty-msg').classList.add('hidden');
     document.getElementById('schema-fields').innerHTML = '';
+    // Show export block
+    document.getElementById('export-block').classList.remove('hidden');
+    document.getElementById('export-btn').disabled = false;
+    // Populate datasinks
+    loadDatasinks();
     showSuccess('Selected connection for preview/schema.');
+  }
+
+  // ── Export block logic ────────────────────────────────────────────────────────
+  async function loadDatasinks() {
+    try {
+      const data = await api('GET', '/api/v1/datasinks');
+      const sinks = data.datasinks || [];
+      const select = document.getElementById('datasink-select');
+      const assetSelect = document.getElementById('asset-datasink-select');
+      select.innerHTML = '<option value="">Select datasink…</option>' +
+        sinks.map(s => `<option value="${escapeHtml(s.name)}">${escapeHtml(s.name)} (${escapeHtml(s.type)})</option>`).join('');
+      assetSelect.innerHTML = select.innerHTML;
+    } catch (e) {
+      showError('Failed to load datasinks: ' + e.message);
+    }
+  }
+
+  async function onDatasinkChange() {
+    const name = document.getElementById('datasink-select').value;
+    const datalist = document.getElementById('destination-datasets-list');
+    datalist.innerHTML = '';
+    if (!name) return;
+    try {
+      const data = await api('GET', `/api/v1/datasinks/${encodeURIComponent(name)}/datasets`);
+      datalist.innerHTML = (data.datasets || [])
+        .map(d => `<option value="${escapeHtml(d)}"></option>`).join('');
+    } catch (e) {
+      // Non-fatal: user can still type a new dataset name
+    }
+  }
+
+  function onDestinationChange() {
+    const dest = document.getElementById('destination-dataset-input').value;
+    const label = document.getElementById('asset-dataset-label');
+    label.value = dest ? dest + '_assets' : '';
+  }
+
+  function onAssetToggleChange() {
+    const enabled = document.getElementById('asset-resolution-toggle').checked;
+    const cfg = document.getElementById('asset-resolution-config');
+    cfg.classList.toggle('hidden', !enabled);
+    if (enabled) {
+      loadDatasinks();
+      detectAssetFields();
+    }
+  }
+
+  async function detectAssetFields() {
+    if (!_activeId) return;
+    const fieldsDiv = document.getElementById('asset-url-fields-list');
+    fieldsDiv.innerHTML = '<p class="text-xs text-gray-400">Detecting…</p>';
+    try {
+      const sinkName = document.getElementById('datasink-select').value || '';
+      const sinkOfName = sinkName || 'any';
+      const body = _activeType === 'system'
+        ? { system_source_name: _activeId }
+        : { connection_id: _activeId };
+      const data = await api('POST', `/api/v1/datasinks/${encodeURIComponent(sinkOfName)}/detect-asset-fields`, body);
+      const fields = data.candidate_fields || [];
+      if (fields.length === 0) {
+        fieldsDiv.innerHTML = '<p class="text-xs text-gray-400">No asset URL fields detected.</p>';
+        return;
+      }
+      fieldsDiv.innerHTML = fields.map(f => {
+        const id = 'asset-url-field-' + f.replace(/\./g, '-');
+        return `<label class="flex items-center gap-2 text-sm text-gray-700">
+          <input type="checkbox" id="${escapeHtml(id)}" data-field="${escapeHtml(f)}"
+            checked class="w-4 h-4 text-indigo-600 rounded" data-testid="${escapeHtml(id)}" />
+          <span class="font-mono text-xs">${escapeHtml(f)}</span>
+        </label>`;
+      }).join('');
+    } catch (e) {
+      fieldsDiv.innerHTML = '<p class="text-xs text-gray-400">Could not detect asset fields.</p>';
+    }
+  }
+
+  async function submitExport() {
+    if (!_activeId) return;
+    const datasinkName = document.getElementById('datasink-select').value;
+    const destinationDataset = document.getElementById('destination-dataset-input').value.trim();
+    if (!datasinkName || !destinationDataset) {
+      showError('Select a datasink and enter a destination dataset name.');
+      return;
+    }
+    const assetResolution = document.getElementById('asset-resolution-toggle').checked;
+    const query = document.getElementById('preview-query-input').value;
+    const startVal = document.getElementById('preview-start-input').value;
+    const endVal = document.getElementById('preview-end-input').value;
+
+    const body = {
+      datasource_type: _activeType,
+      datasource_ref: _activeId,
+      datasource_filter: {
+        query,
+        start: startVal ? new Date(startVal).toISOString() : null,
+        end: endVal ? new Date(endVal).toISOString() : null,
+      },
+      datasink_name: datasinkName,
+      destination_dataset: destinationDataset,
+      asset_resolution: assetResolution,
+    };
+
+    if (assetResolution) {
+      const assetDatasinkName = document.getElementById('asset-datasink-select').value;
+      const assetUrlPrefix = document.getElementById('asset-url-prefix-input').value;
+      const checkedFields = Array.from(
+        document.querySelectorAll('#asset-url-fields-list input[type=checkbox]:checked')
+      ).map(el => el.dataset.field);
+      body.asset_datasink_name = assetDatasinkName || null;
+      body.asset_url_prefix = assetUrlPrefix;
+      body.asset_url_fields = checkedFields;
+    }
+
+    const btn = document.getElementById('export-btn');
+    btn.disabled = true;
+    btn.textContent = 'Exporting…';
+    try {
+      const job = await api('POST', '/api/v1/export-jobs', body);
+      showSuccess(`Export job created (ID: ${job.id.slice(0, 8)}…). Monitoring progress in Jobs tab.`);
+      openJobsPanel();
+      startJobsPolling();
+    } catch (e) {
+      showError('Export failed: ' + e.message);
+    } finally {
+      btn.disabled = false;
+      btn.textContent = 'Export';
+    }
+  }
+
+  // ── Jobs tab logic ────────────────────────────────────────────────────────────
+  const JOB_STATUS_COLOURS = {
+    pending:   'bg-yellow-100 text-yellow-800',
+    running:   'bg-blue-100 text-blue-800',
+    completed: 'bg-green-100 text-green-700',
+    failed:    'bg-red-100 text-red-700',
+  };
+
+  function renderJobProgress(job) {
+    if (job.records_total != null) {
+      const pct = job.records_total > 0 ? Math.round(job.records_processed / job.records_total * 100) : 0;
+      return `${job.records_processed} / ${job.records_total} (${pct}%)`;
+    }
+    return `${job.records_processed} exported`;
+  }
+
+  const _LOCAL_SINK_TYPES = new Set(['local-zip', 'local-jsonl']);
+
+  function renderJobRow(job) {
+    const cls = JOB_STATUS_COLOURS[job.status] || 'bg-gray-100 text-gray-600';
+    const retryBtn = job.status === 'failed'
+      ? `<button class="text-xs text-indigo-600 hover:underline"
+           id="job-retry-btn-${job.id}" data-testid="job-retry-btn-${job.id}"
+           onclick="window.DB.retryJob('${job.id}')">Retry</button>`
+      : '';
+    const downloadBtn = (job.status === 'completed' && _LOCAL_SINK_TYPES.has(job.datasink_type || ''))
+      ? `<a href="${base()}/api/v1/export-jobs/${job.id}/download"
+           class="text-xs text-green-600 hover:underline flex items-center gap-0.5"
+           download data-testid="job-download-btn-${job.id}">
+           <span class="material-symbols-outlined text-sm">download</span>Download
+         </a>`
+      : '';
+    return `
+<div id="job-row-${job.id}" class="bg-white rounded-xl border border-gray-200 p-4 shadow-sm flex flex-wrap items-center gap-3"
+     data-testid="job-row-${job.id}">
+  <span id="job-status-${job.id}"
+    class="inline-block px-2 py-0.5 rounded text-xs font-medium ${cls}"
+    data-testid="job-status-${job.id}">${job.status}</span>
+  <span id="job-source-${job.id}" class="text-xs text-gray-600 truncate max-w-[8rem]"
+    data-testid="job-source-${job.id}" title="${escapeHtml(job.datasource_ref)}">${escapeHtml(job.datasource_ref)}</span>
+  <span class="text-gray-300">→</span>
+  <span id="job-sink-${job.id}" class="text-xs text-gray-600 truncate max-w-[8rem]"
+    data-testid="job-sink-${job.id}">${escapeHtml(job.datasink_name)}</span>
+  <span id="job-progress-${job.id}" class="text-xs text-gray-500 ml-auto"
+    data-testid="job-progress-${job.id}">${renderJobProgress(job)}</span>
+  ${downloadBtn}
+  ${retryBtn}
+</div>`;
+  }
+
+  let _sinkTypeCache = {};
+
+  async function _getSinkTypes() {
+    if (Object.keys(_sinkTypeCache).length) return _sinkTypeCache;
+    try {
+      const d = await api('GET', '/api/v1/datasinks');
+      _sinkTypeCache = Object.fromEntries((d.datasinks || []).map(s => [s.name, s.type]));
+    } catch (_) {}
+    return _sinkTypeCache;
+  }
+
+  async function loadJobs() {
+    try {
+      const [data, sinkTypes] = await Promise.all([
+        api('GET', '/api/v1/export-jobs'),
+        _getSinkTypes(),
+      ]);
+      const jobs = (data.items || []).map(j => ({
+        ...j,
+        datasink_type: sinkTypes[j.datasink_name] || '',
+      }));
+      const list = document.getElementById('jobs-list');
+      const empty = document.getElementById('jobs-empty-msg');
+      if (jobs.length === 0) {
+        list.innerHTML = '';
+        if (empty) empty.classList.remove('hidden');
+        return;
+      }
+      if (empty) empty.classList.add('hidden');
+      list.innerHTML = jobs.map(renderJobRow).join('');
+      // Stop polling if no active jobs
+      const hasActive = jobs.some(j => j.status === 'pending' || j.status === 'running');
+      if (!hasActive) stopJobsPolling();
+    } catch (e) {
+      // silent — panel might be closed
+    }
+  }
+
+  function startJobsPolling() {
+    if (_jobsPollingTimer) return;
+    _jobsPollingTimer = setInterval(loadJobs, 3000);
+  }
+
+  function stopJobsPolling() {
+    if (_jobsPollingTimer) {
+      clearInterval(_jobsPollingTimer);
+      _jobsPollingTimer = null;
+    }
+  }
+
+  function openJobsPanel() {
+    document.getElementById('jobs-panel').classList.remove('hidden');
+    loadJobs();
+    startJobsPolling();
+  }
+
+  function closeJobsPanel() {
+    document.getElementById('jobs-panel').classList.add('hidden');
+  }
+
+  async function retryJob(id) {
+    try {
+      await api('POST', `/api/v1/export-jobs/${id}/retry`);
+      showSuccess('Retry job created.');
+      await loadJobs();
+      startJobsPolling();
+    } catch (e) {
+      showError('Retry failed: ' + e.message);
+    }
   }
 
   // ── Ping ──────────────────────────────────────────────────────────────────────
@@ -488,6 +744,12 @@
     document.getElementById('add-connection-btn').addEventListener('click', openAddModal);
     document.getElementById('preview-submit-btn').addEventListener('click', runPreview);
     document.getElementById('schema-discover-btn').addEventListener('click', discoverSchema);
+    document.getElementById('export-btn').addEventListener('click', submitExport);
+    document.getElementById('datasink-select').addEventListener('change', onDatasinkChange);
+    document.getElementById('destination-dataset-input').addEventListener('input', onDestinationChange);
+    document.getElementById('asset-resolution-toggle').addEventListener('change', onAssetToggleChange);
+    document.getElementById('jobs-tab-btn').addEventListener('click', openJobsPanel);
+    document.getElementById('jobs-panel-close-btn').addEventListener('click', closeJobsPanel);
 
     // Close modal on backdrop click
     document.getElementById('conn-modal').addEventListener('click', (e) => {
@@ -517,6 +779,8 @@
     testConnection,
     submitConnection,
     deleteConnection,
+    retryJob,
+    openJobsPanel,
   };
 
   document.addEventListener('DOMContentLoaded', init);

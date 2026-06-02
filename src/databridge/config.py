@@ -59,9 +59,39 @@ class SystemSourceConfig:
         return uuid5(NAMESPACE_DNS, self.name)
 
 
-_SETTINGS_VALID_KEYS = {"server", "database_url", "encryption_key", "datasources"}
+_DATASINK_VALID_KEYS = {"name", "type", "url", "path", "filename_template"}
+_DATASINK_SERVICE_TYPES = {"dataset-mock", "annotator-mock"}
+_DATASINK_LOCAL_TYPES = {"local-zip", "local-jsonl"}
+_DATASINK_ALL_TYPES = _DATASINK_SERVICE_TYPES | _DATASINK_LOCAL_TYPES
+
+
+@dataclass(frozen=True)
+class DatasinkConfig:
+    name: str
+    type: str
+    url: str = ""
+    path: str = ""
+    filename_template: str = ""
+
+
+@dataclass(frozen=True)
+class ExportSettings:
+    stale_job_timeout_minutes: int = 15
+    max_concurrent_jobs_per_org: int = 5
+    job_ttl_days: int = 7
+    poll_interval_seconds: int = 3
+    keepalive_interval_minutes: int = 2
+    batch_size: int = 100
+    redis_url: str = "redis://localhost:6379"
+
+
+_SETTINGS_VALID_KEYS = {"server", "database_url", "encryption_key", "datasources", "datasinks", "export"}
 _SERVER_VALID_KEYS = {
     "host", "port", "workers", "root_path", "debug", "silence_probes", "hide_auth_inputs",
+}
+_EXPORT_VALID_KEYS = {
+    "stale_job_timeout_minutes", "max_concurrent_jobs_per_org", "job_ttl_days",
+    "poll_interval_seconds", "keepalive_interval_minutes", "batch_size", "redis_url",
 }
 
 @dataclass(frozen=True)
@@ -70,6 +100,8 @@ class Settings:
     database_url: str
     encryption_key: str
     datasources: tuple[SystemSourceConfig, ...]
+    datasinks: tuple[DatasinkConfig, ...] = field(default_factory=tuple)
+    export: ExportSettings = field(default_factory=ExportSettings)
 
 
 # ── Secret injection ─────────────────────────────────────────────────────────
@@ -176,9 +208,34 @@ def get_settings() -> Settings:
         _validate_keys(ds, _SYSTEM_SOURCE_VALID_KEYS, f"datasource '{ds.get('name', '?')}'")
         sources.append(SystemSourceConfig(**ds))
 
+    # datasinks
+    datasink_list = raw.get("datasinks") or []
+    sinks: list[DatasinkConfig] = []
+    for sk in datasink_list:
+        _validate_keys(sk, _DATASINK_VALID_KEYS, f"datasink '{sk.get('name', '?')}'")
+        sk_name = sk.get("name", "?")
+        sk_type = sk.get("type", "")
+        if sk_type not in _DATASINK_ALL_TYPES:
+            raise ValueError(
+                f"datasink '{sk_name}': unknown type {sk_type!r}. "
+                f"Valid types: {sorted(_DATASINK_ALL_TYPES)}"
+            )
+        if sk_type in _DATASINK_SERVICE_TYPES and not sk.get("url"):
+            raise ValueError(f"datasink '{sk_name}': 'url' is required for type {sk_type!r}")
+        if sk_type in _DATASINK_LOCAL_TYPES and not sk.get("path"):
+            raise ValueError(f"datasink '{sk_name}': 'path' is required for type {sk_type!r}")
+        sinks.append(DatasinkConfig(**sk))
+
+    # export settings
+    export_raw = raw.get("export") or {}
+    _validate_keys(export_raw, _EXPORT_VALID_KEYS, "export")
+    export_settings = ExportSettings(**export_raw)
+
     return Settings(
         server=server,
         database_url=raw.get("database_url", ""),
         encryption_key=raw.get("encryption_key", ""),
         datasources=tuple(sources),
+        datasinks=tuple(sinks),
+        export=export_settings,
     )

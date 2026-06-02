@@ -20,7 +20,7 @@
   Deferred: None
 -->
 
-# dataimporter Constitution
+# databridge Constitution
 
 ## Core Principles
 
