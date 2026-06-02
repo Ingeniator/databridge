@@ -1,0 +1,87 @@
+# Export Pipeline — Implemented Contract
+
+**Date**: 2026-06-02 | **Branch**: `001-datasink-export`
+
+## Overview
+
+Export jobs move data from a datasource (connection or system source) to a configured datasink in paginated batches via an ARQ/Redis background worker.
+
+## Datasink Types
+
+| Type | Protocol | Config Required |
+|---|---|---|
+| `dataset-mock` | HTTP: `GET /datasets`, `POST /datasets`, `POST /datasets/{name}/files` | `url` |
+| `annotator-mock` | HTTP: `GET /api/v1/projects`, `POST /api/v1/projects`, `POST /api/v1/projects/{name}/tasks` | `url` |
+| `local-zip` | Local filesystem ZIP archive | `path` |
+| `local-jsonl` | Local filesystem JSONL file | `path` |
+
+## Job Status Transitions
+
+```
+pending → running → completed
+                  → failed
+```
+
+- **pending**: job created, queued in Redis
+- **running**: worker picked up job, processing batches
+- **completed**: all records written, sink finalized
+- **failed**: unrecoverable error (sink unreachable, disk full, adapter error)
+
+## Role-Based Job Visibility
+
+| X-Role | `role` | Visible Jobs |
+|---|---|---|
+| `SUPER_ADMIN` | `super_admin` | All jobs (all orgs) |
+| `ORG_ADMIN` | `org_admin` | All jobs in caller's org |
+| `USER` or absent | `user` | Caller's own jobs only |
+
+Org and user IDs are derived from `X-Group-ID` header (`org_id/user_id` format).
+
+## Stale Job Timeout
+
+Jobs in `running` status with `last_heartbeat_at < NOW() - stale_job_timeout_minutes` are automatically marked `failed`. Default timeout: **15 minutes** (configurable via `export.stale_job_timeout_minutes`).
+
+The sweep runs every 60 seconds as a background asyncio task in the worker process.
+
+## TTL Purge
+
+Jobs with `status IN ('completed', 'failed')` and `completed_at < NOW() - job_ttl_days` are deleted. Default TTL: **7 days** (configurable via `export.job_ttl_days`).
+
+## Per-Org Concurrency Limit
+
+Max concurrent active (pending + running) jobs per org: **5** (configurable via `export.max_concurrent_jobs_per_org`). Enforced atomically via `pg_advisory_xact_lock` on the org_id. Exceeding returns `429 Too Many Requests`.
+
+## Metrics
+
+All 8 Prometheus instruments defined in `export_metrics.py`:
+
+| Metric | Type | Labels |
+|---|---|---|
+| `export_jobs_created_total` | Counter | `org_id`, `sink_type` |
+| `export_jobs_completed_total` | Counter | `org_id`, `sink_type` |
+| `export_jobs_failed_total` | Counter | `org_id`, `sink_type` |
+| `export_active_jobs` | Gauge | `org_id` |
+| `export_records_per_second` | Gauge | `sink_type` |
+| `export_asset_resolution_success_total` | Counter | — |
+| `export_asset_resolution_failed_total` | Counter | — |
+| `export_org_concurrent_jobs` | Gauge | `org_id` |
+
+## API Endpoints
+
+| Method | Path | Description |
+|---|---|---|
+| `GET` | `/api/v1/datasinks` | List configured datasinks |
+| `GET` | `/api/v1/datasinks/{name}/datasets` | List datasets in a sink |
+| `POST` | `/api/v1/datasinks/{name}/detect-asset-fields` | Detect URL fields for asset resolution |
+| `POST` | `/api/v1/export-jobs` | Create and enqueue a new export job |
+| `GET` | `/api/v1/export-jobs` | List jobs (role-filtered, paginated) |
+| `GET` | `/api/v1/export-jobs/{id}` | Get single job |
+| `POST` | `/api/v1/export-jobs/{id}/retry` | Retry a failed job (creates new job) |
+
+## Asset Resolution
+
+When `asset_resolution=true`, the worker:
+1. Detects URL fields via name convention (`image_url`, `file_url`, etc.) + URL regex on sample values
+2. For each URL field in each record: fetches binary content, posts to `asset_sink`, replaces field value with stored filename
+3. On fetch failure (4xx/timeout): skips the entire record, increments `asset_errors`
+4. Asset dataset auto-named `{destination_dataset}_assets`

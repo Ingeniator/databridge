@@ -27,3 +27,7 @@ async def get_connection_or_404(
 
 def get_system_sources() -> list[SystemSourceConfig]:
     return list(get_settings().datasources)
+
+
+async def get_arq_pool(request):
+    return getattr(request.app.state, "arq_pool", None)

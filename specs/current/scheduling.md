@@ -1,1 +1,1 @@
-not ready yet
+out of scope of service. Will be orchestrated from external airflow

@@ -24,6 +24,8 @@ dependencies = [
     "psycopg2-binary>=2.9",
     "pyyaml>=6.0",
     "prometheus-client>=0.21",
+    "arq>=0.26",
+    "redis[hiredis]>=5.0",
 ]
 
 [build-system]
@@ -45,6 +47,7 @@ dev = [
     "pytest-bdd>=7.0",
     "anyio[trio]>=4.0",
     "pytest-cov>=7.1.0",
+    "fakeredis>=2.20",
 ]
 
 [tool.pytest.ini_options]

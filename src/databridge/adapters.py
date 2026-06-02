@@ -20,6 +20,18 @@ class ConnectionAdapter(Protocol):
     async def schema(self, start: datetime | None, end: datetime | None) -> tuple[dict[str, dict], int]: ...
 
 
+class ExportableAdapter(Protocol):
+    async def count(self, query: str, start: datetime | None, end: datetime | None) -> int: ...
+    async def fetch_page(
+        self,
+        query: str,
+        start: datetime | None,
+        end: datetime | None,
+        limit: int,
+        offset: int,
+    ) -> list[dict]: ...
+
+
 # ── Schema helpers ────────────────────────────────────────────────────────────
 
 def _py_type(val: Any) -> str:
@@ -95,6 +107,19 @@ class BaseAdapter:
     async def preview(self, query: str, start: datetime | None, end: datetime | None, limit: int) -> list[dict]:
         raise NotImplementedError
 
+    async def count(self, query: str, start: datetime | None, end: datetime | None) -> int:
+        raise NotImplementedError
+
+    async def fetch_page(
+        self,
+        query: str,
+        start: datetime | None,
+        end: datetime | None,
+        limit: int,
+        offset: int,
+    ) -> list[dict]:
+        raise NotImplementedError
+
     async def schema(self, start: datetime | None, end: datetime | None) -> tuple[dict[str, dict], int]:
         if start is None:
             end = datetime.now(timezone.utc)
@@ -165,6 +190,46 @@ class ClickHouseConnectionAdapter(BaseAdapter):
                     pass
         return results
 
+    async def count(self, query: str, start: datetime | None, end: datetime | None) -> int:
+        creds = self._creds_dict()
+        user = creds.get("user", "")
+        password = creds.get("password", "")
+        database = creds.get("database", "default")
+        table = creds.get("table", "llogr_events")
+        conditions: list[str] = []
+        if query:
+            q_esc = query.replace("'", "\\'")
+            conditions.append(f"positionCaseInsensitive(toString(message), '{q_esc}') > 0")
+        if start:
+            conditions.append(f"timestamp >= parseDateTimeBestEffort('{start.isoformat()}')")
+        if end:
+            conditions.append(f"timestamp < parseDateTimeBestEffort('{end.isoformat()}')")
+        where = f" WHERE {' AND '.join(conditions)}" if conditions else ""
+        sql = f"SELECT COUNT(*) FROM {database}.{table}{where} FORMAT JSONEachRow"
+        params: dict = {"query": sql}
+        if user:
+            params["user"] = user
+            params["password"] = password
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            r = await client.get(self._url + "/", params=params)
+            r.raise_for_status()
+        for line in r.text.strip().splitlines():
+            line = line.strip()
+            if line:
+                row = json.loads(line)
+                return int(next(iter(row.values())))
+        return 0
+
+    async def fetch_page(
+        self,
+        query: str,
+        start: datetime | None,
+        end: datetime | None,
+        limit: int,
+        offset: int,
+    ) -> list[dict]:
+        return await self.preview(query, start, end, limit)
+
     async def schema(self, start: datetime | None, end: datetime | None) -> tuple[dict[str, dict], int]:
         return await super().schema(start, end)
 
@@ -220,6 +285,65 @@ class TrinoConnectionAdapter(BaseAdapter):
 
         return results[:limit]
 
+    async def count(self, query: str, start: datetime | None, end: datetime | None) -> int:
+        creds = self._creds_dict()
+        user = creds.get("user", "trino")
+        catalog = creds.get("catalog", "")
+        schema_name = creds.get("schema_name", "")
+        conditions: list[str] = []
+        if query:
+            q_esc = query.replace("'", "''")
+            conditions.append(f"CAST(message AS VARCHAR) LIKE '%{q_esc}%'")
+        if start:
+            conditions.append(f"timestamp >= TIMESTAMP '{start.strftime('%Y-%m-%d %H:%M:%S')}'")
+        if end:
+            conditions.append(f"timestamp < TIMESTAMP '{end.strftime('%Y-%m-%d %H:%M:%S')}'")
+        table = f"{catalog}.{schema_name}.events" if catalog and schema_name else "events"
+        where = f" WHERE {' AND '.join(conditions)}" if conditions else ""
+        sql = f"SELECT COUNT(*) FROM {table}{where}"
+        headers = {"X-Trino-User": user, "Content-Type": "text/plain"}
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            r = await client.post(f"{self._url}/v1/statement", content=sql, headers=headers)
+            r.raise_for_status()
+            data = r.json()
+            for row in data.get("data", []):
+                return int(row[0])
+        return 0
+
+    async def fetch_page(
+        self,
+        query: str,
+        start: datetime | None,
+        end: datetime | None,
+        limit: int,
+        offset: int,
+    ) -> list[dict]:
+        creds = self._creds_dict()
+        user = creds.get("user", "trino")
+        catalog = creds.get("catalog", "")
+        schema_name = creds.get("schema_name", "")
+        conditions: list[str] = []
+        if query:
+            q_esc = query.replace("'", "''")
+            conditions.append(f"CAST(message AS VARCHAR) LIKE '%{q_esc}%'")
+        if start:
+            conditions.append(f"timestamp >= TIMESTAMP '{start.strftime('%Y-%m-%d %H:%M:%S')}'")
+        if end:
+            conditions.append(f"timestamp < TIMESTAMP '{end.strftime('%Y-%m-%d %H:%M:%S')}'")
+        table = f"{catalog}.{schema_name}.events" if catalog and schema_name else "events"
+        where = f" WHERE {' AND '.join(conditions)}" if conditions else ""
+        sql = f"SELECT * FROM {table}{where} LIMIT {limit} OFFSET {offset}"
+        headers = {"X-Trino-User": user, "Content-Type": "text/plain"}
+        results: list[dict] = []
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            r = await client.post(f"{self._url}/v1/statement", content=sql, headers=headers)
+            r.raise_for_status()
+            data = r.json()
+            columns = [col["name"] for col in data.get("columns", [])]
+            for row in data.get("data", []):
+                results.append(dict(zip(columns, row)))
+        return results
+
     async def schema(self, start: datetime | None, end: datetime | None) -> tuple[dict[str, dict], int]:
         return await super().schema(start, end)
 
@@ -251,6 +375,49 @@ class LangfuseConnectionAdapter(BaseAdapter):
             r.raise_for_status()
             data = r.json()
             return data.get("data", [])
+
+    async def count(self, query: str, start: datetime | None, end: datetime | None) -> int:
+        creds = self._creds_dict()
+        public_key = creds.get("public_key", "")
+        secret_key = creds.get("secret_key", "")
+        params: dict = {"limit": 1}
+        if query:
+            params["name"] = query
+        if start:
+            params["fromTimestamp"] = start.isoformat()
+        if end:
+            params["toTimestamp"] = end.isoformat()
+        auth = (public_key, secret_key) if public_key else None
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            r = await client.get(f"{self._url}/api/public/traces", params=params, auth=auth)
+            r.raise_for_status()
+            data = r.json()
+            return data.get("meta", {}).get("total", 0)
+
+    async def fetch_page(
+        self,
+        query: str,
+        start: datetime | None,
+        end: datetime | None,
+        limit: int,
+        offset: int,
+    ) -> list[dict]:
+        page = (offset // limit) + 1 if limit else 1
+        creds = self._creds_dict()
+        public_key = creds.get("public_key", "")
+        secret_key = creds.get("secret_key", "")
+        params: dict = {"limit": limit, "page": page}
+        if query:
+            params["name"] = query
+        if start:
+            params["fromTimestamp"] = start.isoformat()
+        if end:
+            params["toTimestamp"] = end.isoformat()
+        auth = (public_key, secret_key) if public_key else None
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            r = await client.get(f"{self._url}/api/public/traces", params=params, auth=auth)
+            r.raise_for_status()
+            return r.json().get("data", [])
 
     async def schema(self, start: datetime | None, end: datetime | None) -> tuple[dict[str, dict], int]:
         return await super().schema(start, end)
@@ -329,6 +496,88 @@ class S3ConnectionAdapter(BaseAdapter):
                 path = f"s3://{bucket}/{prefix}*.{fmt}"
                 try:
                     rows = con.execute(f"SELECT * FROM {reader}('{path}') LIMIT {limit}").fetchall()
+                    cols = [d[0] for d in (con.description or [])]
+                    return [dict(zip(cols, row)) for row in rows]
+                except Exception:
+                    continue
+            return []
+
+        return await asyncio.to_thread(_scan)
+
+    async def count(self, query: str, start: datetime | None, end: datetime | None) -> int:
+        creds = self._creds_dict()
+        bucket = creds.get("bucket", "") or getattr(self._conn, "bucket", "")
+        key_prefix = creds.get("key_prefix", "") or getattr(self._conn, "key_prefix", "")
+        access_key = creds.get("access_key_id", "")
+        secret_key = creds.get("secret_access_key", "")
+        region = creds.get("region", "us-east-1")
+        endpoint = creds.get("endpoint", "") or getattr(self._conn, "endpoint", "")
+
+        def _count() -> int:
+            import duckdb
+            con = duckdb.connect()
+            try:
+                con.execute("INSTALL httpfs; LOAD httpfs;")
+            except Exception:
+                pass
+            if access_key:
+                con.execute(f"SET s3_access_key_id='{access_key}';")
+                con.execute(f"SET s3_secret_access_key='{secret_key}';")
+            con.execute(f"SET s3_region='{region}';")
+            if endpoint:
+                host = endpoint.rstrip("/").split("://")[-1]
+                con.execute(f"SET s3_endpoint='{host}';")
+                con.execute("SET s3_use_ssl=false;")
+            prefix = key_prefix.rstrip("/") + "/" if key_prefix else ""
+            for fmt, reader in (("parquet", "read_parquet"), ("json", "read_json_auto"), ("csv", "read_csv_auto")):
+                path = f"s3://{bucket}/{prefix}*.{fmt}"
+                try:
+                    row = con.execute(f"SELECT COUNT(*) FROM {reader}('{path}')").fetchone()
+                    return int(row[0]) if row else 0
+                except Exception:
+                    continue
+            return 0
+
+        return await asyncio.to_thread(_count)
+
+    async def fetch_page(
+        self,
+        query: str,
+        start: datetime | None,
+        end: datetime | None,
+        limit: int,
+        offset: int,
+    ) -> list[dict]:
+        creds = self._creds_dict()
+        bucket = creds.get("bucket", "") or getattr(self._conn, "bucket", "")
+        key_prefix = creds.get("key_prefix", "") or getattr(self._conn, "key_prefix", "")
+        access_key = creds.get("access_key_id", "")
+        secret_key = creds.get("secret_access_key", "")
+        region = creds.get("region", "us-east-1")
+        endpoint = creds.get("endpoint", "") or getattr(self._conn, "endpoint", "")
+
+        def _scan() -> list[dict]:
+            import duckdb
+            con = duckdb.connect()
+            try:
+                con.execute("INSTALL httpfs; LOAD httpfs;")
+            except Exception:
+                pass
+            if access_key:
+                con.execute(f"SET s3_access_key_id='{access_key}';")
+                con.execute(f"SET s3_secret_access_key='{secret_key}';")
+            con.execute(f"SET s3_region='{region}';")
+            if endpoint:
+                host = endpoint.rstrip("/").split("://")[-1]
+                con.execute(f"SET s3_endpoint='{host}';")
+                con.execute("SET s3_use_ssl=false;")
+            prefix = key_prefix.rstrip("/") + "/" if key_prefix else ""
+            for fmt, reader in (("parquet", "read_parquet"), ("json", "read_json_auto"), ("csv", "read_csv_auto")):
+                path = f"s3://{bucket}/{prefix}*.{fmt}"
+                try:
+                    rows = con.execute(
+                        f"SELECT * FROM {reader}('{path}') LIMIT {limit} OFFSET {offset}"
+                    ).fetchall()
                     cols = [d[0] for d in (con.description or [])]
                     return [dict(zip(cols, row)) for row in rows]
                 except Exception:
