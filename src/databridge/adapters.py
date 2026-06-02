@@ -112,6 +112,10 @@ class BaseAdapter:
             if isinstance(res, list):
                 all_records.extend(res)
 
+        if not all_records:
+            fallback = await self.preview("", None, None, limit=20)
+            all_records = fallback
+
         return _infer_schema(all_records), len(all_records)
 
 

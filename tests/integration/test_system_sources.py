@@ -121,3 +121,58 @@ def test_preview_system_source(client):
     body = r.json()
     assert "results" in body
     assert body["connection_id"] == sys_id
+
+
+def test_schema_system_source(client):
+    sys_id = str(uuid5(NAMESPACE_DNS, CH_SOURCE_NAME))
+    sample = '{"session_id":"s1","cost":0.01,"ts":"2026-01-01T00:00:00Z"}\n'
+    with respx.mock:
+        respx.get(CH_SOURCE_URL + "/").mock(
+            return_value=httpx.Response(200, text=sample)
+        )
+        r = client.get(
+            f"/api/v1/connections/{sys_id}/schema",
+            headers={"X-Group-ID": "u1"},
+        )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert "fields" in body
+    assert isinstance(body["fields"], dict)
+    assert len(body["fields"]) > 0
+    assert body["connection_id"] == sys_id
+
+
+def test_schema_system_source_falls_back_when_time_window_empty(client):
+    """When windowed previews return no rows, schema falls back to unfiltered query."""
+    sys_id = str(uuid5(NAMESPACE_DNS, CH_SOURCE_NAME))
+    sample = '{"session_id":"s1","cost":0.01}\n'
+    call_count = 0
+
+    def _side_effect(request, *args, **kwargs):
+        nonlocal call_count
+        call_count += 1
+        # first 5 calls are the windowed previews — return empty
+        # 6th call is the fallback (no date filter) — return data
+        if call_count <= 5:
+            return httpx.Response(200, text="")
+        return httpx.Response(200, text=sample)
+
+    with respx.mock:
+        respx.get(CH_SOURCE_URL + "/").mock(side_effect=_side_effect)
+        r = client.get(
+            f"/api/v1/connections/{sys_id}/schema",
+            headers={"X-Group-ID": "u1"},
+        )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert len(body["fields"]) > 0
+    assert body["sample_count"] > 0
+
+
+def test_schema_system_source_not_found_for_unknown_id(client):
+    unknown_id = str(uuid5(NAMESPACE_DNS, "nonexistent-source"))
+    r = client.get(
+        f"/api/v1/connections/{unknown_id}/schema",
+        headers={"X-Group-ID": "u1"},
+    )
+    assert r.status_code == 404
