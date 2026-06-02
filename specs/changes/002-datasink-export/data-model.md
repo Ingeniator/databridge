@@ -596,6 +596,7 @@ All interactive export UI elements and dynamically rendered content must carry s
 | `job-source-{id}` | Source name label | Per job row |
 | `job-sink-{id}` | Sink name label | Per job row |
 | `job-retry-btn-{id}` | Retry button | Per failed job row |
+| `job-download-btn-{id}` | Download link | Per completed local-sink job row |
 
 **Playwright convention**: all selectors use `getByTestId(…)` or `[data-testid="…"]` — never CSS class or DOM index.
 

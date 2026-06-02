@@ -96,6 +96,7 @@ async def run_export_job(ctx: dict, job_id: str) -> None:
         # Set up sink
         from databridge.sinks import get_sink
         sink = get_sink(datasink_config)
+        sink._job_id = job_id          # stamp so filename includes job ID
         await sink.ping()
         destination_dataset = job_resp["destination_dataset"]
         await sink.create_dataset(destination_dataset)

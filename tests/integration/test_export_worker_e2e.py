@@ -11,11 +11,13 @@ import json
 import textwrap
 import zipfile
 from pathlib import Path
+from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import UUID
 
 import asyncpg
 import pytest
 import pytest_asyncio
+from fastapi.testclient import TestClient
 
 from databridge.config import DatasinkConfig, ExportSettings, Settings, ServerConfig, SystemSourceConfig, get_settings
 from databridge.export.db import insert_export_job
@@ -198,3 +200,99 @@ async def test_jsonl_export_with_query_filter(pool, settings, export_dir):
     assert row["records_total"] is not None
     # filtered result must be <= unfiltered total
     assert row["records_processed"] <= 20
+
+
+# ── download endpoint tests ───────────────────────────────────────────────────
+
+def _make_app_with_real_pool(real_pool, settings):
+    """Build a test FastAPI app backed by the real PG pool."""
+    import os
+    import textwrap as tw
+    from cryptography.fernet import Fernet
+
+    # write a temp config pointing at real services
+    import tempfile, yaml as _yaml, pathlib
+    cfg = {
+        "server": {"debug": True, "port": 5010, "silence_probes": False},
+        "database_url": _DB_URL,
+        "encryption_key": settings.encryption_key,
+        "datasources": [
+            {"name": s.name, "type": s.type, "url": s.url,
+             "database": s.database, "table": s.table, "user": s.user, "password": s.password}
+            for s in settings.datasources
+        ],
+        "datasinks": [
+            {"name": sk.name, "type": sk.type,
+             **({} if not sk.url else {"url": sk.url}),
+             **({} if not sk.path else {"path": sk.path})}
+            for sk in settings.datasinks
+        ],
+    }
+    tmp = tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False)
+    import json as _json
+    tmp.write(_yaml.dump(cfg))
+    tmp.flush()
+    os.environ["DATABRIDGE_CONFIG"] = tmp.name
+
+    from databridge.config import get_settings as _gs
+    _gs.cache_clear()
+
+    _arq_mock = MagicMock(enqueue_job=AsyncMock(), aclose=AsyncMock())
+    with patch("databridge.main.create_pool", AsyncMock(return_value=real_pool)), \
+         patch("arq.create_pool", AsyncMock(return_value=_arq_mock)):
+        from databridge.main import create_app
+        app = create_app()
+    return app, tmp.name
+
+
+@pytest.mark.asyncio
+async def test_download_jsonl_returns_200(pool, settings, export_dir):
+    """GET /api/v1/export-jobs/{id}/download returns 200 with file content."""
+    row = await _run_job(pool, settings, "local-jsonl", "dl_e2e")
+    job_id = row["id"]
+
+    app, cfg_path = _make_app_with_real_pool(pool, settings)
+    with TestClient(app, raise_server_exceptions=False) as c:
+        resp = c.get(f"/api/v1/export-jobs/{job_id}/download", headers={"X-Group-ID": "test-org/test-user"})
+    assert resp.status_code == 200, resp.text
+    assert resp.headers["content-type"].startswith("application/x-ndjson")
+    lines = resp.text.strip().splitlines()
+    assert len(lines) == row["records_processed"]
+    json.loads(lines[0])  # valid JSON
+
+
+@pytest.mark.asyncio
+async def test_download_zip_returns_200(pool, settings, export_dir):
+    """GET /api/v1/export-jobs/{id}/download returns a valid ZIP."""
+    row = await _run_job(pool, settings, "local-zip", "dl_zip_e2e")
+    job_id = row["id"]
+
+    app, cfg_path = _make_app_with_real_pool(pool, settings)
+    with TestClient(app, raise_server_exceptions=False) as c:
+        resp = c.get(f"/api/v1/export-jobs/{job_id}/download", headers={"X-Group-ID": "test-org/test-user"})
+    assert resp.status_code == 200, resp.text
+    assert resp.headers["content-type"] == "application/zip"
+    import io
+    with zipfile.ZipFile(io.BytesIO(resp.content)) as zf:
+        assert len(zf.namelist()) == row["records_processed"]
+
+
+@pytest.mark.asyncio
+async def test_download_pending_job_returns_409(pool, settings, export_dir):
+    """Downloading a pending job returns 409."""
+    from databridge.export.models import ExportJobCreate
+    job = await insert_export_job(
+        pool,
+        ExportJobCreate(
+            datasource_type="system",
+            datasource_ref=str(settings.datasources[0].id),
+            datasink_name="local-jsonl",
+            destination_dataset="dl_pending",
+        ),
+        org_id="test-org",
+        user_id="test-user",
+    )
+    app, _ = _make_app_with_real_pool(pool, settings)
+    with TestClient(app, raise_server_exceptions=False) as c:
+        resp = c.get(f"/api/v1/export-jobs/{job.id}/download", headers={"X-Group-ID": "test-org/test-user"})
+    assert resp.status_code == 409

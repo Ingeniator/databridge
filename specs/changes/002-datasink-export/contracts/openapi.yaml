@@ -681,8 +681,61 @@ paths:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
 
+  /api/v1/export-jobs/{id}/download:
+    get:
+      tags: [export-jobs]
+      summary: Download the output file for a completed local-sink job
+      operationId: download_export
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: "File download (application/zip or application/x-ndjson)"
+          content:
+            application/zip:
+              schema:
+                type: string
+                format: binary
+            application/x-ndjson:
+              schema:
+                type: string
+                format: binary
+        "400":
+          description: "Sink is not a local type (no file to download)"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: "Job not found, not visible, or output file missing from disk"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "409":
+          description: "Job is not completed yet"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                not_complete:
+                  value:
+                    detail: "job is running, not completed"
+        "401":
+          description: "Authentication required"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
 tags:
   - name: datasinks
     description: "Datasink configuration and dataset enumeration"
   - name: export-jobs
-    description: "Export job lifecycle — create, monitor, retry"
+    description: "Export job lifecycle — create, monitor, retry, download"

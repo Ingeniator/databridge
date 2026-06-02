@@ -371,12 +371,21 @@
     return `${job.records_processed} exported`;
   }
 
+  const _LOCAL_SINK_TYPES = new Set(['local-zip', 'local-jsonl']);
+
   function renderJobRow(job) {
     const cls = JOB_STATUS_COLOURS[job.status] || 'bg-gray-100 text-gray-600';
     const retryBtn = job.status === 'failed'
       ? `<button class="text-xs text-indigo-600 hover:underline"
            id="job-retry-btn-${job.id}" data-testid="job-retry-btn-${job.id}"
            onclick="window.DB.retryJob('${job.id}')">Retry</button>`
+      : '';
+    const downloadBtn = (job.status === 'completed' && _LOCAL_SINK_TYPES.has(job.datasink_type || ''))
+      ? `<a href="${base()}/api/v1/export-jobs/${job.id}/download"
+           class="text-xs text-green-600 hover:underline flex items-center gap-0.5"
+           download data-testid="job-download-btn-${job.id}">
+           <span class="material-symbols-outlined text-sm">download</span>Download
+         </a>`
       : '';
     return `
 <div id="job-row-${job.id}" class="bg-white rounded-xl border border-gray-200 p-4 shadow-sm flex flex-wrap items-center gap-3"
@@ -391,14 +400,32 @@
     data-testid="job-sink-${job.id}">${escapeHtml(job.datasink_name)}</span>
   <span id="job-progress-${job.id}" class="text-xs text-gray-500 ml-auto"
     data-testid="job-progress-${job.id}">${renderJobProgress(job)}</span>
+  ${downloadBtn}
   ${retryBtn}
 </div>`;
   }
 
+  let _sinkTypeCache = {};
+
+  async function _getSinkTypes() {
+    if (Object.keys(_sinkTypeCache).length) return _sinkTypeCache;
+    try {
+      const d = await api('GET', '/api/v1/datasinks');
+      _sinkTypeCache = Object.fromEntries((d.datasinks || []).map(s => [s.name, s.type]));
+    } catch (_) {}
+    return _sinkTypeCache;
+  }
+
   async function loadJobs() {
     try {
-      const data = await api('GET', '/api/v1/export-jobs');
-      const jobs = data.items || [];
+      const [data, sinkTypes] = await Promise.all([
+        api('GET', '/api/v1/export-jobs'),
+        _getSinkTypes(),
+      ]);
+      const jobs = (data.items || []).map(j => ({
+        ...j,
+        datasink_type: sinkTypes[j.datasink_name] || '',
+      }));
       const list = document.getElementById('jobs-list');
       const empty = document.getElementById('jobs-empty-msg');
       if (jobs.length === 0) {

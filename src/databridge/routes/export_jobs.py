@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+from pathlib import Path
 from uuid import UUID
 
 import asyncpg
 import structlog
 from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import FileResponse
 
 from databridge.auth import AuthContext, get_auth
 from databridge.config import get_settings
@@ -145,6 +147,51 @@ async def retry_export_job(
         org_id=auth.org_id, sink_type=datasink_cfg.type if datasink_cfg else "unknown"
     ).inc()
     return new_job
+
+
+_LOCAL_SINK_TYPES = {"local-zip", "local-jsonl"}
+_EXTENSIONS = {"local-zip": ".zip", "local-jsonl": ".jsonl"}
+_MEDIA_TYPES = {"local-zip": "application/zip", "local-jsonl": "application/x-ndjson"}
+
+
+@router.get("/api/v1/export-jobs/{job_id}/download")
+async def download_export(
+    job_id: UUID,
+    auth: AuthContext = Depends(get_auth),
+    pool: asyncpg.Pool = Depends(get_pool),
+) -> FileResponse:
+    settings = get_settings()
+    job = await get_export_job(pool, job_id, auth.org_id, auth.user_id, auth.role)
+    if job is None:
+        raise HTTPException(status_code=404, detail="export job not found")
+    if job.status != ExportJobStatus.completed:
+        raise HTTPException(status_code=409, detail=f"job is {job.status.value}, not completed")
+
+    datasink_cfg = next((s for s in settings.datasinks if s.name == job.datasink_name), None)
+    if datasink_cfg is None or datasink_cfg.type not in _LOCAL_SINK_TYPES:
+        raise HTTPException(status_code=400, detail="download only available for local-zip and local-jsonl sinks")
+
+    ext = _EXTENSIONS[datasink_cfg.type]
+    base = Path(datasink_cfg.path)
+
+    # try stamped name first, fall back to legacy (no job_id suffix)
+    candidates = [
+        base / f"{job.destination_dataset}_{job_id}{ext}",
+        base / f"{job.destination_dataset}{ext}",
+    ]
+    filepath = next((p for p in candidates if p.exists()), None)
+
+    if filepath is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"output file not found in {datasink_cfg.path} for dataset '{job.destination_dataset}'",
+        )
+
+    return FileResponse(
+        path=str(filepath),
+        filename=filepath.name,
+        media_type=_MEDIA_TYPES[datasink_cfg.type],
+    )
 
 
 # Module-level reference to ARQ pool, set by lifespan

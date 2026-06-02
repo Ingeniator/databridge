@@ -77,6 +77,18 @@ All 8 Prometheus instruments defined in `export_metrics.py`:
 | `GET` | `/api/v1/export-jobs` | List jobs (role-filtered, paginated) |
 | `GET` | `/api/v1/export-jobs/{id}` | Get single job |
 | `POST` | `/api/v1/export-jobs/{id}/retry` | Retry a failed job (creates new job) |
+| `GET` | `/api/v1/export-jobs/{id}/download` | Download the output file (local sinks only) |
+
+## File Downloads (Local Sinks)
+
+For `local-zip` and `local-jsonl` sinks, the output file is served via the download endpoint once the job reaches `completed`. Files are written to the path configured in `DatasinkConfig.path` with the naming convention:
+
+```
+{destination_dataset}_{job_id}.jsonl   # local-jsonl
+{destination_dataset}_{job_id}.zip     # local-zip
+```
+
+The job ID in the filename prevents collisions between multiple exports to the same dataset name. Auth is enforced — only the job owner (or org_admin/super_admin) can download. Returns `409` if the job is not yet completed, `404` if the file is missing from disk.
 
 ## Asset Resolution
 
