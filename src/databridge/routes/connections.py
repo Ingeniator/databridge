@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import time
 from datetime import datetime, timezone
@@ -10,7 +11,7 @@ import structlog
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import JSONResponse
 
-from databridge.adapters import get_adapter
+from databridge.adapters import get_adapter, _infer_schema
 from databridge.auth import AuthContext, get_auth
 from databridge.config import SystemSourceConfig, get_settings
 from databridge.crypto import decrypt_credentials, encrypt_credentials
@@ -24,6 +25,12 @@ from databridge.db.connections import (
     update_connection_status,
 )
 from databridge.db.pool import get_pool
+from databridge.export.models import (
+    AssetResolutionTestRequest,
+    AssetResolutionTestResponse,
+    AssetUrlTestResult,
+    PiiFieldsResponse,
+)
 from databridge.models import (
     ConnectionCreate,
     ConnectionListResponse,
@@ -242,10 +249,14 @@ async def preview_connection(
             creds = {f: getattr(src, f) for f in src.__dataclass_fields__ if f not in ("name", "type")}
             adapter = get_adapter(src, creds)
             try:
-                results = await adapter.preview(body.query, body.start, body.end, body.limit)
+                results, total_count = await asyncio.gather(
+                    adapter.preview(body.query, body.start, body.end, body.limit),
+                    _safe_count(adapter, body.query, body.start, body.end),
+                )
             except Exception as exc:
                 raise HTTPException(status_code=502, detail=str(exc))
-            return PreviewResponse(results=results, connection_id=id)
+            schema_fields = _infer_schema(results[:20])
+            return PreviewResponse(results=results, connection_id=id, total_count=total_count, schema_fields=schema_fields)
 
     row = await get_connection(pool, id=id, owner_key=auth.public_key)
     if row is None:
@@ -256,12 +267,23 @@ async def preview_connection(
     creds = decrypt_credentials(row["credentials_enc"])
     adapter = get_adapter(row, creds)
     try:
-        results = await adapter.preview(body.query, body.start, body.end, body.limit)
+        results, total_count = await asyncio.gather(
+            adapter.preview(body.query, body.start, body.end, body.limit),
+            _safe_count(adapter, body.query, body.start, body.end),
+        )
     except NotImplementedError:
         raise HTTPException(status_code=501, detail="preview not yet implemented for this backend")
     except Exception as exc:
         raise HTTPException(status_code=502, detail=str(exc))
-    return PreviewResponse(results=results, connection_id=id)
+    schema_fields = _infer_schema(results[:20])
+    return PreviewResponse(results=results, connection_id=id, total_count=total_count, schema_fields=schema_fields)
+
+
+async def _safe_count(adapter, query: str, start, end) -> int:
+    try:
+        return await adapter.count(query, start, end)
+    except (NotImplementedError, Exception):
+        return 0
 
 
 # ── Schema ────────────────────────────────────────────────────────────────────
@@ -307,3 +329,113 @@ async def schema_connection(
     from databridge.models import SchemaField
     fields = {k: SchemaField(**v) if isinstance(v, dict) else v for k, v in fields_raw.items()}
     return SchemaResponse(fields=fields, sample_count=sample_count, connection_id=id)
+
+
+# ── PII field detection ───────────────────────────────────────────────────────
+
+_PII_PATTERNS = ("email", "phone", "ssn", "password", "ip", "user_id", "token", "secret", "card")
+
+
+@router.get("/connections/{id}/pii-fields", response_model=PiiFieldsResponse)
+async def pii_fields(
+    id: UUID,
+    auth: AuthContext = Depends(get_auth),
+    pool: asyncpg.Pool = Depends(get_pool),
+    system_sources: list[SystemSourceConfig] = Depends(get_system_sources),
+) -> PiiFieldsResponse:
+    from databridge.export.masking import pii_candidate_fields
+
+    for src in system_sources:
+        if src.id == id:
+            creds = {f: getattr(src, f) for f in src.__dataclass_fields__ if f not in ("name", "type")}
+            adapter = get_adapter(src, creds)
+            try:
+                fields_raw, _ = await adapter.schema(None, None)
+            except Exception:
+                fields_raw = {}
+            return PiiFieldsResponse(candidate_fields=pii_candidate_fields(fields_raw))
+
+    row = await get_connection(pool, id=id, owner_key=auth.public_key)
+    if row is None:
+        raise HTTPException(status_code=404, detail="connection not found")
+
+    creds = decrypt_credentials(row["credentials_enc"])
+    adapter = get_adapter(row, creds)
+    try:
+        fields_raw, _ = await adapter.schema(None, None)
+    except Exception:
+        fields_raw = {}
+    return PiiFieldsResponse(candidate_fields=pii_candidate_fields(fields_raw))
+
+
+# ── Asset resolution test ─────────────────────────────────────────────────────
+
+@router.post("/connections/{id}/test-asset-resolution", response_model=AssetResolutionTestResponse)
+async def test_asset_resolution(
+    id: UUID,
+    body: AssetResolutionTestRequest,
+    auth: AuthContext = Depends(get_auth),
+    pool: asyncpg.Pool = Depends(get_pool),
+    system_sources: list[SystemSourceConfig] = Depends(get_system_sources),
+) -> AssetResolutionTestResponse:
+    import re
+    _URL_RE = re.compile(r"^https?://", re.IGNORECASE)
+
+    # Resolve adapter (system source or DB connection)
+    adapter = None
+    for src in system_sources:
+        if src.id == id:
+            creds = {f: getattr(src, f) for f in src.__dataclass_fields__ if f not in ("name", "type")}
+            adapter = get_adapter(src, creds)
+            break
+    if adapter is None:
+        row = await get_connection(pool, id=id, owner_key=auth.public_key)
+        if row is None:
+            raise HTTPException(status_code=404, detail="connection not found")
+        creds = decrypt_credentials(row["credentials_enc"])
+        adapter = get_adapter(row, creds)
+
+    try:
+        records = await adapter.preview("", None, None, limit=5)
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"preview failed: {exc}")
+
+    # Collect up to 2 sample URLs per configured field
+    samples: list[tuple[str, str]] = []
+    for field in body.url_fields:
+        count = 0
+        for rec in records:
+            val = rec.get(field)
+            if val and isinstance(val, str) and _URL_RE.match(val):
+                samples.append((field, val))
+                count += 1
+                if count >= 2:
+                    break
+
+    if not samples:
+        return AssetResolutionTestResponse(results=[])
+
+    import httpx
+    results: list[AssetUrlTestResult] = []
+    async with httpx.AsyncClient(timeout=10.0, follow_redirects=True) as client:
+        for field, raw in samples:
+            url = (body.url_prefix + raw) if body.url_prefix else raw
+            try:
+                r = await client.head(url)
+                results.append(AssetUrlTestResult(
+                    field=field,
+                    raw_value=raw,
+                    resolved_url=url,
+                    status_code=r.status_code,
+                    ok=r.status_code < 400,
+                ))
+            except httpx.RequestError as exc:
+                results.append(AssetUrlTestResult(
+                    field=field,
+                    raw_value=raw,
+                    resolved_url=url,
+                    ok=False,
+                    error=str(exc),
+                ))
+
+    return AssetResolutionTestResponse(results=results)

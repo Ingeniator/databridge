@@ -45,7 +45,9 @@ class _ExportPool:
     def _make_job(self, org_id, user_id, datasource_type, datasource_ref,
                   datasource_filter, datasink_name, destination_dataset,
                   asset_resolution, asset_url_fields, asset_url_prefix,
-                  asset_datasink_name, asset_dataset):
+                  asset_datasink_name, asset_dataset,
+                  masking_rules=None, sampling_config=None,
+                  webhook_url=None, webhook_enabled=False):
         now = datetime.now(timezone.utc)
         job_id = uuid4()
         job = {
@@ -62,6 +64,10 @@ class _ExportPool:
             "records_processed": 0, "records_skipped": 0, "asset_errors": 0,
             "error_message": None, "created_at": now, "started_at": None,
             "completed_at": None, "last_heartbeat_at": None,
+            "masking_rules": masking_rules or "[]",
+            "sampling_config": sampling_config,
+            "webhook_url": webhook_url,
+            "webhook_enabled": webhook_enabled or False,
         }
         self._jobs[str(job_id)] = job
         return job

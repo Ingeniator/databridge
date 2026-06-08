@@ -12,6 +12,37 @@ class FilterSnapshot(BaseModel):
     query: str = ""
     start: datetime | None = None
     end: datetime | None = None
+    time_field: str | None = None
+    limit: int = Field(default=50, ge=1, le=100_000)
+
+
+class MaskingAction(str, Enum):
+    mask = "mask"
+    hash = "hash"
+    drop = "drop"
+    redact = "redact"
+
+
+class MaskingRule(BaseModel):
+    field_path: Annotated[str, Field(min_length=1, max_length=255)]
+    action: MaskingAction
+
+
+class SamplingMethod(str, Enum):
+    random = "random"
+    systematic = "systematic"
+    stratified = "stratified"
+
+
+class SamplingConfig(BaseModel):
+    method: SamplingMethod = SamplingMethod.random
+    target_column: str | None = None
+    ratio_or_size: float = Field(gt=0.0)
+    max_traces: int | None = Field(default=None, gt=0)
+
+
+class PiiFieldsResponse(BaseModel):
+    candidate_fields: list[str]
 
 
 class ExportJobStatus(str, Enum):
@@ -19,6 +50,7 @@ class ExportJobStatus(str, Enum):
     running = "running"
     completed = "completed"
     failed = "failed"
+    cancelled = "cancelled"
 
 
 class ExportJob(BaseModel):
@@ -45,6 +77,10 @@ class ExportJob(BaseModel):
     started_at: datetime | None
     completed_at: datetime | None
     last_heartbeat_at: datetime | None
+    masking_rules: list[MaskingRule] = Field(default_factory=list)
+    sampling_config: SamplingConfig | None = None
+    webhook_url: str | None = None
+    webhook_enabled: bool = False
 
 
 class ExportJobCreate(BaseModel):
@@ -57,6 +93,11 @@ class ExportJobCreate(BaseModel):
     asset_url_fields: list[str] = Field(default_factory=list)
     asset_url_prefix: str = ""
     asset_datasink_name: str | None = None
+    asset_dataset: str | None = None
+    masking_rules: list[MaskingRule] = Field(default_factory=list)
+    sampling_config: SamplingConfig | None = None
+    webhook_url: str | None = None
+    webhook_enabled: bool = False
 
 
 class ExportJobResponse(BaseModel):
@@ -82,6 +123,10 @@ class ExportJobResponse(BaseModel):
     created_at: datetime
     started_at: datetime | None
     completed_at: datetime | None
+    masking_rules: list[MaskingRule] = Field(default_factory=list)
+    sampling_config: SamplingConfig | None = None
+    webhook_url: str | None = None
+    webhook_enabled: bool = False
 
 
 class ExportJobListResponse(BaseModel):
@@ -111,3 +156,21 @@ class AssetFieldDetectRequest(BaseModel):
 
 class AssetFieldDetectResponse(BaseModel):
     candidate_fields: list[str]
+
+
+class AssetResolutionTestRequest(BaseModel):
+    url_fields: list[str]
+    url_prefix: str = ""
+
+
+class AssetUrlTestResult(BaseModel):
+    field: str
+    raw_value: str
+    resolved_url: str
+    status_code: int | None = None
+    ok: bool
+    error: str | None = None
+
+
+class AssetResolutionTestResponse(BaseModel):
+    results: list[AssetUrlTestResult]

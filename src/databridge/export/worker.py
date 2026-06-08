@@ -8,9 +8,12 @@ import structlog
 
 from databridge.export.db import (
     get_export_job,
+    is_job_cancelled,
     update_export_job_status,
     update_export_progress,
     update_records_total,
+    _parse_masking_rules,
+    _parse_sampling_config,
 )
 from databridge.export.models import ExportJobStatus
 from databridge.export_metrics import (
@@ -20,6 +23,9 @@ from databridge.export_metrics import (
     EXPORT_JOBS_COMPLETED,
     EXPORT_JOBS_FAILED,
     EXPORT_RECORDS_PER_SECOND,
+    MASKING_RULES_APPLIED,
+    SAMPLING_RECORDS_DROPPED,
+    WEBHOOK_DELIVERY,
 )
 
 logger = structlog.get_logger(__name__)
@@ -33,6 +39,9 @@ async def run_export_job(ctx: dict, job_id: str) -> None:
     job_resp = await pool.fetchrow("SELECT * FROM export_jobs WHERE id = $1", UUID(job_id))
     if job_resp is None:
         logger.warning("export_job_not_found", job_id=job_id)
+        return
+    if job_resp["status"] == "cancelled":
+        logger.info("export_job_skipped_cancelled", job_id=job_id)
         return
 
     org_id = job_resp["org_id"]
@@ -122,6 +131,19 @@ async def run_export_job(ctx: dict, job_id: str) -> None:
                     await asset_sink.ping()
                     await asset_sink.create_dataset(asset_dataset)
 
+        # Load masking/sampling/webhook config from job row
+        masking_rules = _parse_masking_rules(job_resp.get("masking_rules"))
+        sampling_config_obj = _parse_sampling_config(job_resp.get("sampling_config"))
+        webhook_url = job_resp.get("webhook_url")
+        webhook_enabled = job_resp.get("webhook_enabled", False)
+
+        sampling_buffer = None
+        max_traces = None
+        if sampling_config_obj is not None:
+            from databridge.export.sampling import SamplingBuffer
+            sampling_buffer = SamplingBuffer(sampling_config_obj)
+            max_traces = sampling_config_obj.max_traces
+
         # Batch loop
         batch_size = settings.export.batch_size
         keepalive_interval = settings.export.keepalive_interval_minutes * 60
@@ -130,9 +152,25 @@ async def run_export_job(ctx: dict, job_id: str) -> None:
         asset_errors = 0
         batch_start = time.monotonic()
 
+        _limit_reached = False
         for offset in range(0, total, batch_size):
+            if _limit_reached:
+                break
             records = await adapter.fetch_page(query, start, end, limit=batch_size, offset=offset)
             for record in records:
+                # Sampling filter
+                if sampling_buffer is not None:
+                    if not sampling_buffer.feed(record):
+                        records_skipped += 1
+                        SAMPLING_RECORDS_DROPPED.labels(org_id=org_id).inc()
+                        continue
+
+                # Masking
+                if masking_rules:
+                    from databridge.export.masking import apply_masking
+                    record = apply_masking(record, masking_rules)
+                    MASKING_RULES_APPLIED.labels(org_id=org_id).inc()
+
                 if asset_resolution and asset_sink and asset_url_fields and asset_dataset:
                     try:
                         from databridge.export.asset import resolve_assets, AssetResolutionError
@@ -149,10 +187,18 @@ async def run_export_job(ctx: dict, job_id: str) -> None:
                 await sink.post_file(destination_dataset, record)
                 records_processed += 1
 
+                if max_traces and records_processed >= max_traces:
+                    _limit_reached = True
+                    break
+
             if hasattr(sink, "records_skipped"):
                 records_skipped += sink.records_skipped
 
             await update_export_progress(pool, UUID(job_id), records_processed, records_skipped, asset_errors)
+
+            if await is_job_cancelled(pool, UUID(job_id)):
+                _limit_reached = True
+                break
 
             # Throughput metric
             elapsed = time.monotonic() - batch_start
@@ -169,9 +215,24 @@ async def run_export_job(ctx: dict, job_id: str) -> None:
         if asset_sink:
             await asset_sink.finalise()
 
+        if await is_job_cancelled(pool, UUID(job_id)):
+            EXPORT_ACTIVE_JOBS.labels(org_id=org_id).dec()
+            return
+
         await update_export_job_status(pool, UUID(job_id), ExportJobStatus.completed)
         EXPORT_JOBS_COMPLETED.labels(org_id=org_id, sink_type=datasink_config.type).inc()
         EXPORT_ACTIVE_JOBS.labels(org_id=org_id).dec()
+
+        # Webhook on completion
+        if webhook_enabled and webhook_url:
+            from databridge.export.webhook import deliver_webhook
+            import asyncio as _asyncio
+            _asyncio.create_task(deliver_webhook(webhook_url, {
+                "job_id": job_id,
+                "status": "completed",
+                "records_processed": records_processed,
+            }))
+            WEBHOOK_DELIVERY.labels(org_id=org_id, status="success").inc()
 
     except Exception as exc:
         logger.error("export_job_failed", job_id=job_id, exc_info=True)

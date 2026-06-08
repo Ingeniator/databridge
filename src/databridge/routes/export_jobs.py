@@ -12,6 +12,7 @@ from databridge.auth import AuthContext, get_auth
 from databridge.config import get_settings
 from databridge.db.pool import get_pool
 from databridge.export.db import (
+    cancel_export_job,
     count_active_jobs_for_org,
     get_export_job,
     insert_export_job,
@@ -132,6 +133,10 @@ async def retry_export_job(
         asset_url_fields=original.asset_url_fields,
         asset_url_prefix=original.asset_url_prefix,
         asset_datasink_name=original.asset_datasink_name,
+        masking_rules=original.masking_rules,
+        sampling_config=original.sampling_config,
+        webhook_url=original.webhook_url,
+        webhook_enabled=original.webhook_enabled,
     )
     new_job = await insert_export_job(pool, new_job_data, org_id=auth.org_id, user_id=auth.user_id)
 
@@ -147,6 +152,23 @@ async def retry_export_job(
         org_id=auth.org_id, sink_type=datasink_cfg.type if datasink_cfg else "unknown"
     ).inc()
     return new_job
+
+
+@router.post("/api/v1/export-jobs/{job_id}/cancel", status_code=204)
+async def cancel_export_job_endpoint(
+    job_id: UUID,
+    auth: AuthContext = Depends(get_auth),
+    pool: asyncpg.Pool = Depends(get_pool),
+) -> None:
+    ok = await cancel_export_job(pool, job_id, auth.org_id, auth.user_id, auth.role)
+    if not ok:
+        job = await get_export_job(pool, job_id, auth.org_id, auth.user_id, auth.role)
+        if job is None:
+            raise HTTPException(status_code=404, detail="export job not found")
+        raise HTTPException(
+            status_code=409,
+            detail=f"job cannot be cancelled (current status: {job.status.value})",
+        )
 
 
 _LOCAL_SINK_TYPES = {"local-zip", "local-jsonl"}

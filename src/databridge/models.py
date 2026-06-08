@@ -103,12 +103,15 @@ class PreviewRequest(BaseModel):
     query: str = ""
     start: datetime | None = None
     end: datetime | None = None
-    limit: Annotated[int, Field(ge=1, le=200)] = 50
+    time_field: str | None = None
+    limit: Annotated[int, Field(ge=1, le=100_000)] = 50
 
 
 class PreviewResponse(BaseModel):
     results: list[dict[str, Any]]
     connection_id: UUID
+    total_count: int = 0
+    schema_fields: dict = Field(default_factory=dict)
 
 
 # ── Schema discovery ──────────────────────────────────────────────────────────

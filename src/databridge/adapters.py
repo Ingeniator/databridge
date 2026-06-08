@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import time
 from datetime import datetime, timezone, timedelta
 from typing import Any, Protocol
@@ -10,6 +11,43 @@ import httpx
 import structlog
 
 logger = structlog.get_logger(__name__)
+
+_OP_MAP = {"==": "=", "!=": "!=", ">=": ">=", "<=": "<=", ">": ">", "<": "<"}
+_RULE_RE = re.compile(r"(\w+)\s*(==|!=|>=|<=|>|<|contains)\s*'((?:[^'\\]|\\.)*)'", re.IGNORECASE)
+
+
+def _query_to_sql(expr: str, search_column: str) -> str | None:
+    """Translate a filter expression to a SQL condition fragment.
+
+    Structured rules like ``field == 'v'`` or ``a == 'x' AND b contains 'y'``
+    are converted to proper SQL equality/search conditions.  Anything that
+    doesn't match the structured pattern falls back to a full-text
+    ``positionCaseInsensitive`` search on *search_column*.  Returns None when
+    the expression is empty.
+    """
+    expr = expr.strip()
+    if not expr:
+        return None
+
+    tokens = re.split(r"\s+(AND|OR)\s+", expr, flags=re.IGNORECASE)
+    logic_ops = re.findall(r"\s+(AND|OR)\s+", expr, flags=re.IGNORECASE)
+
+    sql_parts: list[str] = []
+    for token in tokens:
+        m = _RULE_RE.fullmatch(token.strip())
+        if not m:
+            q_esc = expr.replace("'", "\\'")
+            return f"positionCaseInsensitive(toString({search_column}), '{q_esc}') > 0"
+        field, op, value = m.group(1), m.group(2), m.group(3)
+        if op.lower() == "contains":
+            sql_parts.append(f"positionCaseInsensitive(toString({field}), '{value}') > 0")
+        else:
+            sql_parts.append(f"{field} {_OP_MAP[op]} '{value}'")
+
+    result = sql_parts[0]
+    for i, logic in enumerate(logic_ops):
+        result += f" {logic} {sql_parts[i + 1]}"
+    return result
 
 _PING_TIMEOUT = 5.0
 
@@ -159,10 +197,10 @@ class ClickHouseConnectionAdapter(BaseAdapter):
         database = creds.get("database", "default")
         table = creds.get("table", "llogr_events")
 
+        search_column = creds.get("search_column", "message")
         conditions: list[str] = []
-        if query:
-            q_esc = query.replace("'", "\\'")
-            conditions.append(f"positionCaseInsensitive(toString(message), '{q_esc}') > 0")
+        if sql_cond := _query_to_sql(query, search_column):
+            conditions.append(sql_cond)
         if start:
             conditions.append(f"timestamp >= parseDateTimeBestEffort('{start.isoformat()}')")
         if end:
@@ -196,10 +234,10 @@ class ClickHouseConnectionAdapter(BaseAdapter):
         password = creds.get("password", "")
         database = creds.get("database", "default")
         table = creds.get("table", "llogr_events")
+        search_column = creds.get("search_column", "message")
         conditions: list[str] = []
-        if query:
-            q_esc = query.replace("'", "\\'")
-            conditions.append(f"positionCaseInsensitive(toString(message), '{q_esc}') > 0")
+        if sql_cond := _query_to_sql(query, search_column):
+            conditions.append(sql_cond)
         if start:
             conditions.append(f"timestamp >= parseDateTimeBestEffort('{start.isoformat()}')")
         if end:
