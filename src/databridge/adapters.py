@@ -288,7 +288,7 @@ class ClickHouseConnectionAdapter(BaseAdapter):
         if end:
             conditions.append(f"timestamp < parseDateTimeBestEffort('{end.isoformat()}')")
         where = f" WHERE {' AND '.join(conditions)}" if conditions else ""
-        sql = f"SELECT * FROM {database}.{table}{where} LIMIT {limit} OFFSET {offset} FORMAT JSONEachRow"
+        sql = f"SELECT * FROM {database}.{table}{where} ORDER BY timestamp LIMIT {limit} OFFSET {offset} FORMAT JSONEachRow"
         params: dict = {"query": sql}
         if user:
             params["user"] = user
