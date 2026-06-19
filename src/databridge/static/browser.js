@@ -160,18 +160,25 @@
     updateHealthBadge('SYNCING…', 'syncing');
     updateLastSynced('Detecting schema…');
 
-    // Auto-detect schema
+    // Auto-detect schema (load credentials in parallel for user connections)
     try {
-      const data = await api('GET', `/api/v1/connections/${id}/schema`);
+      const schemaPromise = api('GET', `/api/v1/connections/${id}/schema`);
+      const credsPromise = isSystem
+        ? Promise.resolve(null)
+        : api('GET', `/api/v1/connections/${id}/credentials`).catch(() => null);
+      const [data, creds] = await Promise.all([schemaPromise, credsPromise]);
       _schema = data.fields || {};
       renderSchemaSection(_schema);
       updateHealthBadge('HEALTHY STATUS', 'healthy');
-      const firstTs = Object.keys(_schema).find(k => _schema[k].type === 'string' && /time|date|ts|stamp/i.test(k));
-      if (firstTs) {
-        _filterState.time_field = firstTs;
-        renderTimeFieldBadge(firstTs);
-        enableTimeRangeSelect(true);
-      }
+      const savedTs = creds && Object.prototype.hasOwnProperty.call(creds, 'timestamp_column')
+        ? creds.timestamp_column
+        : undefined;
+      const timeField = savedTs !== undefined
+        ? savedTs  // use saved value (may be "" = no timestamp)
+        : Object.keys(_schema).find(k => /time|date|ts|stamp/i.test(k));
+      _filterState.time_field = timeField || null;
+      renderTimeFieldBadge(timeField);
+      enableTimeRangeSelect(!!timeField);
       updateLastSynced(new Date().toLocaleTimeString());
     } catch (e) {
       updateHealthBadge('ERROR', 'error');
@@ -184,15 +191,41 @@
   }
 
   // ── Schema section ─────────────────────────────────────────────────────────
+  function _looksLikeTimestamp(v) {
+    if (v == null) return false;
+    if (typeof v === 'number') return v > 1e9 && v < 1e13; // Unix seconds or ms
+    if (typeof v !== 'string') return false;
+    return /^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}/.test(v) || /^\d{4}-\d{2}-\d{2}$/.test(v);
+  }
+
+  function _fieldTimestampScore(fieldName) {
+    if (!_previewRows || !_previewRows.length) return 0;
+    const sample = _previewRows.slice(0, 10);
+    return sample.filter(r => _looksLikeTimestamp(r[fieldName])).length / sample.length;
+  }
+
+  function _bestTimestampField() {
+    if (!_schema || !_previewRows || !_previewRows.length) return null;
+    let best = null, bestScore = 0;
+    for (const k of Object.keys(_schema)) {
+      const s = _fieldTimestampScore(k);
+      if (s > bestScore) { bestScore = s; best = k; }
+    }
+    return bestScore >= 0.5 ? best : null;
+  }
+
   function renderSchemaSection(fields) {
     const chipsEl = document.getElementById('schema-field-chips');
     const entries = Object.entries(fields || {}).slice(0, 12);
-    chipsEl.innerHTML = entries.map(([k, v]) =>
-      `<div class="field-chip" data-testid="schema-chip-${esc(k.replace(/\./g,'-'))}">
+    chipsEl.innerHTML = entries.map(([k, v]) => {
+      const isTs = k === _filterState.time_field;
+      const score = _fieldTimestampScore(k);
+      const tsHint = score >= 0.5 ? ' <span class="ts-score-dot" title="Values look like timestamps">◷</span>' : '';
+      return `<div class="field-chip${isTs ? ' field-chip--ts' : ''}" data-testid="schema-chip-${esc(k.replace(/\./g,'-'))}" onclick="window.DB.setTimestampField('${esc(k)}')" title="Set as timestamp field">
         <span class="field-name">${esc(k)}</span>
-        <span class="field-type">${esc((v && v.type) || 'str')}</span>
-      </div>`
-    ).join('');
+        <span class="field-type">${esc((v && v.type) || 'str')}${tsHint}</span>
+      </div>`;
+    }).join('');
     renderColumnPicker();
   }
 
@@ -252,18 +285,48 @@
   // ── Time field & range ─────────────────────────────────────────────────────
   function renderTimeFieldBadge(fieldName) {
     const badge = document.getElementById('time-field-badge');
-    badge.textContent = `FIELD: ${fieldName}`;
+    badge.textContent = fieldName ? `FIELD: ${fieldName}` : 'FIELD: none';
+    badge.classList.toggle('opacity-40', !fieldName);
     badge.classList.remove('hidden');
+  }
+
+  function _applyTimestampField(fieldName) {
+    _filterState.time_field = fieldName || null;
+    _filterState.start = null;
+    _filterState.end = null;
+    const sel = document.getElementById('time-range-select');
+    if (sel) sel.value = '';
+    const customRow = document.getElementById('custom-range-row');
+    if (customRow) customRow.classList.add('hidden');
+    const startInput = document.getElementById('custom-start-input');
+    const endInput = document.getElementById('custom-end-input');
+    if (startInput) startInput.value = '';
+    if (endInput) endInput.value = '';
+    renderTimeFieldBadge(fieldName);
+    enableTimeRangeSelect(!!fieldName);
+    _saveTimestampColumn(fieldName);
+    renderSchemaSection(_schema || {});
+    loadPreview();
+  }
+
+  function setTimestampField(fieldName) {
+    _applyTimestampField(_filterState.time_field === fieldName ? null : fieldName);
+  }
+
+  async function _saveTimestampColumn(fieldName) {
+    if (_activeType !== 'connection') return;
+    try {
+      await api('PATCH', `/api/v1/connections/${_activeId}`, {
+        credentials: { timestamp_column: fieldName || '' },
+      });
+    } catch (_) { /* non-critical: UI state already reflects the choice */ }
   }
 
   function cycleTimeField() {
     if (!_schema) return;
-    const tsFields = Object.keys(_schema).filter(k => /time|date|ts|stamp/i.test(k));
-    if (!tsFields.length) return;
-    const idx = tsFields.indexOf(_filterState.time_field);
-    _filterState.time_field = tsFields[(idx + 1) % tsFields.length];
-    renderTimeFieldBadge(_filterState.time_field);
-    loadPreview();
+    const cycle = [null, ...Object.keys(_schema)];
+    const idx = cycle.indexOf(_filterState.time_field);
+    _applyTimestampField(cycle[(idx + 1) % cycle.length]);
   }
 
   function enableTimeRangeSelect(enabled) {
@@ -510,6 +573,16 @@
       _totalCount = data.total_count || 0;
       if (data.schema_fields && Object.keys(data.schema_fields).length && !_schema) {
         _schema = data.schema_fields;
+      }
+      if (_schema) {
+        if (!_filterState.time_field) {
+          const best = _bestTimestampField();
+          if (best) {
+            _filterState.time_field = best;
+            renderTimeFieldBadge(best);
+            enableTimeRangeSelect(true);
+          }
+        }
         renderSchemaSection(_schema);
       }
       renderPreviewTable(_previewRows);
@@ -993,11 +1066,16 @@
       // Only re-render if something changed (avoid flicker)
       const html = jobs.map(job => {
         const statusCls = JOB_STATUS_CLASS[job.status] || 'status-badge';
-        const isLocal = localSinkNames.has(job.datasink_name);
-        const dlBtn = (isLocal && job.status === 'completed')
-          ? `<a href="/api/v1/export-jobs/${esc(job.id)}/download"
+        const dlUrl = job.download_url || (localSinkNames.has(job.datasink_name) ? `/api/v1/export-jobs/${esc(job.id)}/download` : '');
+        const dlBtn = (dlUrl && job.status === 'completed')
+          ? `<a href="${esc(dlUrl)}"
                class="text-xs text-indigo-600 hover:underline"
                data-testid="job-download-btn-${esc(job.id)}">Download</a>`
+          : '';
+        const assetsDlBtn = (job.assets_download_url && job.status === 'completed')
+          ? `<a href="${esc(job.assets_download_url)}"
+               class="text-xs text-indigo-600 hover:underline"
+               data-testid="job-assets-download-btn-${esc(job.id)}">Assets</a>`
           : '';
         const retryBtn = job.status === 'failed'
           ? `<button class="text-xs text-orange-600 hover:underline font-medium"
@@ -1029,6 +1107,7 @@
   </div>
   <div class="flex items-center gap-3 shrink-0">
     ${dlBtn}
+    ${assetsDlBtn}
     ${retryBtn}
     ${cancelBtn}
     <span class="text-[11px] text-on-surface-variant/40 font-label">${new Date(job.created_at).toLocaleString()}</span>
@@ -1302,6 +1381,7 @@
     toggleColumnPicker,
     _onColumnVisChange,
     cycleTimeField,
+    setTimestampField,
     onTimeRangeChange,
     onCustomRangeChange,
     onPredicateInput,

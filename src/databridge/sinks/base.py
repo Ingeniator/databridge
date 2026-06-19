@@ -24,7 +24,14 @@ class BaseSink(ABC):
         dataset: str,
         record: dict,
         filename: str | None = None,
-    ) -> None: ...
+    ) -> str:
+        """Store one record/file and return the reference to embed in export data.
+
+        For local sinks returns a relative path like ``"{dataset}/{filename}"``.
+        For service sinks returns the original source URL so downstream systems
+        can fetch it directly.
+        """
+        ...
 
     @abstractmethod
     async def finalise(self) -> None: ...

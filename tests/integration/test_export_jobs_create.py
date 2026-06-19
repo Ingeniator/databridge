@@ -47,7 +47,8 @@ class _ExportPool:
                   asset_resolution, asset_url_fields, asset_url_prefix,
                   asset_datasink_name, asset_dataset,
                   masking_rules=None, sampling_config=None,
-                  webhook_url=None, webhook_enabled=False):
+                  webhook_url=None, webhook_enabled=False,
+                  webhook_payload_template=None):
         now = datetime.now(timezone.utc)
         job_id = uuid4()
         job = {
@@ -68,6 +69,7 @@ class _ExportPool:
             "sampling_config": sampling_config,
             "webhook_url": webhook_url,
             "webhook_enabled": webhook_enabled or False,
+            "webhook_payload_template": webhook_payload_template,
         }
         self._jobs[str(job_id)] = job
         return job

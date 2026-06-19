@@ -206,13 +206,14 @@ class ClickHouseConnectionAdapter(BaseAdapter):
         table = creds.get("table", "llogr_events")
 
         search_column = creds.get("search_column", "message")
+        ts_col = creds.get("timestamp_column", "timestamp")
         conditions: list[str] = []
         if sql_cond := _query_to_sql(query, search_column):
             conditions.append(sql_cond)
-        if start:
-            conditions.append(f"timestamp >= parseDateTimeBestEffort('{start.isoformat()}')")
-        if end:
-            conditions.append(f"timestamp < parseDateTimeBestEffort('{end.isoformat()}')")
+        if ts_col and start:
+            conditions.append(f"{ts_col} >= parseDateTimeBestEffort('{start.isoformat()}')")
+        if ts_col and end:
+            conditions.append(f"{ts_col} < parseDateTimeBestEffort('{end.isoformat()}')")
 
         where = f" WHERE {' AND '.join(conditions)}" if conditions else ""
         sql = f"SELECT * FROM {database}.{table}{where} LIMIT {limit} FORMAT JSONEachRow"
@@ -243,13 +244,14 @@ class ClickHouseConnectionAdapter(BaseAdapter):
         database = creds.get("database", "default")
         table = creds.get("table", "llogr_events")
         search_column = creds.get("search_column", "message")
+        ts_col = creds.get("timestamp_column", "timestamp")
         conditions: list[str] = []
         if sql_cond := _query_to_sql(query, search_column):
             conditions.append(sql_cond)
-        if start:
-            conditions.append(f"timestamp >= parseDateTimeBestEffort('{start.isoformat()}')")
-        if end:
-            conditions.append(f"timestamp < parseDateTimeBestEffort('{end.isoformat()}')")
+        if ts_col and start:
+            conditions.append(f"{ts_col} >= parseDateTimeBestEffort('{start.isoformat()}')")
+        if ts_col and end:
+            conditions.append(f"{ts_col} < parseDateTimeBestEffort('{end.isoformat()}')")
         where = f" WHERE {' AND '.join(conditions)}" if conditions else ""
         sql = f"SELECT COUNT(*) FROM {database}.{table}{where} FORMAT JSONEachRow"
         params: dict = {"query": sql}
@@ -280,15 +282,17 @@ class ClickHouseConnectionAdapter(BaseAdapter):
         database = creds.get("database", "default")
         table = creds.get("table", "llogr_events")
         search_column = creds.get("search_column", "message")
+        ts_col = creds.get("timestamp_column", "timestamp")
         conditions: list[str] = []
         if sql_cond := _query_to_sql(query, search_column):
             conditions.append(sql_cond)
-        if start:
-            conditions.append(f"timestamp >= parseDateTimeBestEffort('{start.isoformat()}')")
-        if end:
-            conditions.append(f"timestamp < parseDateTimeBestEffort('{end.isoformat()}')")
+        if ts_col and start:
+            conditions.append(f"{ts_col} >= parseDateTimeBestEffort('{start.isoformat()}')")
+        if ts_col and end:
+            conditions.append(f"{ts_col} < parseDateTimeBestEffort('{end.isoformat()}')")
         where = f" WHERE {' AND '.join(conditions)}" if conditions else ""
-        sql = f"SELECT * FROM {database}.{table}{where} ORDER BY timestamp LIMIT {limit} OFFSET {offset} FORMAT JSONEachRow"
+        order_by = f" ORDER BY {ts_col}" if ts_col else ""
+        sql = f"SELECT * FROM {database}.{table}{where}{order_by} LIMIT {limit} OFFSET {offset} FORMAT JSONEachRow"
         params: dict = {"query": sql}
         if user:
             params["user"] = user

@@ -187,7 +187,14 @@ async def patch_connection(
             raise HTTPException(status_code=404, detail="connection not found")
         existing = decrypt_credentials(bytes(row["credentials_enc"]))
         incoming = _creds_to_dict(body.credentials)
-        merged = {**existing, **{k: v for k, v in incoming.items() if v not in (None, "")}}
+        _CLEARABLE = {"timestamp_column"}
+        merged = {**existing}
+        for k, v in incoming.items():
+            if v is None:
+                continue
+            if v == "" and k not in _CLEARABLE:
+                continue
+            merged[k] = v
         creds_enc = encrypt_credentials(merged)
 
     row = await update_connection(pool, id=id, owner_key=auth.public_key, label=body.label, credentials_enc=creds_enc)

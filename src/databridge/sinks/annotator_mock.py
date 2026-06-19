@@ -39,10 +39,11 @@ class AnnotatorMockSink(BaseSink):
         dataset: str,
         record: dict,
         filename: str | None = None,
-    ) -> None:
+    ) -> str:
         async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
             r = await client.post(f"{self._url}/api/v1/projects/{dataset}/tasks", json=record)
             r.raise_for_status()
+        return record.get("source_url", "")
 
     async def finalise(self) -> None:
         pass

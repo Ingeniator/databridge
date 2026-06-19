@@ -31,6 +31,28 @@ logger = structlog.get_logger(__name__)
 
 router = APIRouter(tags=["export-jobs"])
 
+_LOCAL_SINK_TYPES = {"local-zip", "local-jsonl"}
+
+
+def _with_download_urls(job: ExportJobResponse) -> ExportJobResponse:
+    settings = get_settings()
+    base = settings.server.public_url.rstrip("/")
+    updates: dict = {}
+
+    datasink_cfg = next((s for s in settings.datasinks if s.name == job.datasink_name), None)
+    if datasink_cfg and datasink_cfg.type in _LOCAL_SINK_TYPES:
+        path = f"/api/v1/export-jobs/{job.id}/download"
+        updates["download_url"] = f"{base}{path}" if base else path
+        if job.asset_resolution and job.asset_datasink_name:
+            asset_cfg = next((s for s in settings.datasinks if s.name == job.asset_datasink_name), None)
+            if asset_cfg and asset_cfg.type in _LOCAL_SINK_TYPES:
+                assets_path = f"/api/v1/export-jobs/{job.id}/download?assets=true"
+                updates["assets_download_url"] = f"{base}{assets_path}" if base else assets_path
+    elif datasink_cfg:
+        updates["download_url"] = datasink_cfg.url or ""
+
+    return job.model_copy(update=updates) if updates else job
+
 
 @router.post("/api/v1/export-jobs", response_model=ExportJobResponse, status_code=201)
 async def create_export_job(
@@ -68,7 +90,7 @@ async def create_export_job(
         logger.warning("arq_enqueue_failed", job_id=str(job.id), error=str(exc))
 
     EXPORT_JOBS_CREATED.labels(org_id=auth.org_id, sink_type=datasink_cfg.type).inc()
-    return job
+    return _with_download_urls(job)
 
 
 @router.get("/api/v1/export-jobs", response_model=ExportJobListResponse)
@@ -88,7 +110,12 @@ async def list_export_jobs_endpoint(
         page_size=page_size,
         status_filter=status,
     )
-    return ExportJobListResponse(items=jobs, total=total, page=page, page_size=page_size)
+    return ExportJobListResponse(
+        items=[_with_download_urls(j) for j in jobs],
+        total=total,
+        page=page,
+        page_size=page_size,
+    )
 
 
 @router.get("/api/v1/export-jobs/{job_id}", response_model=ExportJobResponse)
@@ -100,7 +127,7 @@ async def get_export_job_endpoint(
     job = await get_export_job(pool, job_id, auth.org_id, auth.user_id, auth.role)
     if job is None:
         raise HTTPException(status_code=404, detail="export job not found")
-    return job
+    return _with_download_urls(job)
 
 
 @router.post("/api/v1/export-jobs/{job_id}/retry", response_model=ExportJobResponse, status_code=201)
@@ -153,7 +180,7 @@ async def retry_export_job(
     EXPORT_JOBS_CREATED.labels(
         org_id=auth.org_id, sink_type=datasink_cfg.type if datasink_cfg else "unknown"
     ).inc()
-    return new_job
+    return _with_download_urls(new_job)
 
 
 @router.post("/api/v1/export-jobs/{job_id}/cancel", status_code=204)
@@ -173,14 +200,30 @@ async def cancel_export_job_endpoint(
         )
 
 
-_LOCAL_SINK_TYPES = {"local-zip", "local-jsonl"}
 _EXTENSIONS = {"local-zip": ".zip", "local-jsonl": ".jsonl"}
 _MEDIA_TYPES = {"local-zip": "application/zip", "local-jsonl": "application/x-ndjson"}
+
+
+def _local_file_response(datasink_cfg, dataset: str, job_id: UUID) -> FileResponse:
+    ext = _EXTENSIONS[datasink_cfg.type]
+    base = Path(datasink_cfg.path)
+    candidates = [
+        base / f"{dataset}_{job_id}{ext}",
+        base / f"{dataset}{ext}",
+    ]
+    filepath = next((p for p in candidates if p.exists()), None)
+    if filepath is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"output file not found in {datasink_cfg.path} for dataset '{dataset}'",
+        )
+    return FileResponse(path=str(filepath), filename=filepath.name, media_type=_MEDIA_TYPES[datasink_cfg.type])
 
 
 @router.get("/api/v1/export-jobs/{job_id}/download")
 async def download_export(
     job_id: UUID,
+    assets: bool = Query(default=False),
     auth: AuthContext = Depends(get_auth),
     pool: asyncpg.Pool = Depends(get_pool),
 ) -> FileResponse:
@@ -191,31 +234,18 @@ async def download_export(
     if job.status != ExportJobStatus.completed:
         raise HTTPException(status_code=409, detail=f"job is {job.status.value}, not completed")
 
+    if assets:
+        if not job.asset_resolution or not job.asset_datasink_name or not job.asset_dataset:
+            raise HTTPException(status_code=400, detail="job has no asset resolution configured")
+        asset_cfg = next((s for s in settings.datasinks if s.name == job.asset_datasink_name), None)
+        if asset_cfg is None or asset_cfg.type not in _LOCAL_SINK_TYPES:
+            raise HTTPException(status_code=400, detail="asset download only available for local-zip and local-jsonl sinks")
+        return _local_file_response(asset_cfg, job.asset_dataset, job_id)
+
     datasink_cfg = next((s for s in settings.datasinks if s.name == job.datasink_name), None)
     if datasink_cfg is None or datasink_cfg.type not in _LOCAL_SINK_TYPES:
         raise HTTPException(status_code=400, detail="download only available for local-zip and local-jsonl sinks")
-
-    ext = _EXTENSIONS[datasink_cfg.type]
-    base = Path(datasink_cfg.path)
-
-    # try stamped name first, fall back to legacy (no job_id suffix)
-    candidates = [
-        base / f"{job.destination_dataset}_{job_id}{ext}",
-        base / f"{job.destination_dataset}{ext}",
-    ]
-    filepath = next((p for p in candidates if p.exists()), None)
-
-    if filepath is None:
-        raise HTTPException(
-            status_code=404,
-            detail=f"output file not found in {datasink_cfg.path} for dataset '{job.destination_dataset}'",
-        )
-
-    return FileResponse(
-        path=str(filepath),
-        filename=filepath.name,
-        media_type=_MEDIA_TYPES[datasink_cfg.type],
-    )
+    return _local_file_response(datasink_cfg, job.destination_dataset, job_id)
 
 
 class _WebhookTestRequest(BaseModel):

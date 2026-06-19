@@ -57,12 +57,17 @@ class LocalZipSink(BaseSink):
         dataset: str,
         record: dict,
         filename: str | None = None,
-    ) -> None:
+    ) -> str:
         if dataset not in self._buffers:
             await self.create_dataset(dataset)
         _, zf = self._buffers[dataset]
         fname = filename or self._resolve_filename(record)
-        zf.writestr(fname, json.dumps(record))
+        raw = record.get("data")
+        if raw is not None and isinstance(raw, str):
+            zf.writestr(fname, bytes.fromhex(raw))
+        else:
+            zf.writestr(fname, json.dumps(record))
+        return f"{dataset}/{fname}"
 
     async def finalise(self) -> None:
         for name, (buf, zf) in self._buffers.items():

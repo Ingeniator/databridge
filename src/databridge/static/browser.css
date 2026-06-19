@@ -85,7 +85,10 @@
   gap: 0.5rem;
 }
 
+.field-chip { cursor: pointer; }
 .field-chip:hover { border-color: rgba(9, 76, 178, 0.3); }
+.field-chip--ts { border-color: rgba(9, 76, 178, 0.6); background: rgba(9, 76, 178, 0.08); }
+.ts-score-dot { font-size: 0.6rem; color: rgba(9, 76, 178, 0.7); margin-left: 1px; }
 
 .field-chip .field-name {
   font-size: 0.625rem;

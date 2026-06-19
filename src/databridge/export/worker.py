@@ -233,6 +233,10 @@ async def run_export_job(ctx: dict, job_id: str) -> None:
             from databridge.export.webhook import deliver_webhook, render_payload
             import asyncio as _asyncio
             _download_url = _build_download_url(settings, job_id, datasink_config)
+            _assets_url = (
+                _build_download_url(settings, job_id, datasink_config, assets=True)
+                if asset_resolution else ""
+            )
             _ctx = {
                 "job_id": job_id,
                 "status": "completed",
@@ -242,6 +246,7 @@ async def run_export_job(ctx: dict, job_id: str) -> None:
                 "records_skipped": records_skipped,
                 "error": "",
                 "download_url": _download_url,
+                "assets_download_url": _assets_url,
             }
             _asyncio.create_task(deliver_webhook(webhook_url, render_payload(webhook_payload_template, _ctx)))
             WEBHOOK_DELIVERY.labels(org_id=org_id, status="success").inc()
@@ -266,6 +271,7 @@ async def run_export_job(ctx: dict, job_id: str) -> None:
                 "records_skipped": records_skipped,
                 "error": str(exc),
                 "download_url": "",
+                "assets_download_url": "",
             }
             _asyncio.create_task(deliver_webhook(webhook_url, render_payload(webhook_payload_template, _ctx)))
             WEBHOOK_DELIVERY.labels(org_id=org_id, status="success").inc()
@@ -274,12 +280,14 @@ async def run_export_job(ctx: dict, job_id: str) -> None:
 _LOCAL_SINK_TYPES = {"local-zip", "local-jsonl"}
 
 
-def _build_download_url(settings, job_id: str, datasink_config) -> str:
+def _build_download_url(settings, job_id: str, datasink_config, assets: bool = False) -> str:
     if datasink_config is None:
         return ""
     if datasink_config.type in _LOCAL_SINK_TYPES:
         base = settings.server.public_url.rstrip("/")
         path = f"/api/v1/export-jobs/{job_id}/download"
+        if assets:
+            path += "?assets=true"
         return f"{base}{path}" if base else path
     return datasink_config.url or ""
 

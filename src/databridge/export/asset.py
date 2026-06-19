@@ -63,7 +63,7 @@ async def resolve_assets(
             raise AssetResolutionError(f"Request error fetching {url}: {exc}") from exc
 
         filename = url.rstrip("/").rsplit("/", 1)[-1] or "asset"
-        await asset_sink.post_file(asset_dataset, {"data": content.hex(), "source_url": url}, filename)
-        updated[field] = filename
+        ref = await asset_sink.post_file(asset_dataset, {"data": content.hex(), "source_url": url}, filename)
+        updated[field] = ref or filename
 
     return updated

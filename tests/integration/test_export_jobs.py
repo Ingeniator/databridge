@@ -46,7 +46,8 @@ class _MaskingPool:
                   datasource_filter, datasink_name, destination_dataset,
                   asset_resolution, asset_url_fields, asset_url_prefix,
                   asset_datasink_name, asset_dataset,
-                  masking_rules, sampling_config, webhook_url, webhook_enabled):
+                  masking_rules, sampling_config, webhook_url, webhook_enabled,
+                  webhook_payload_template):
         now = datetime.now(timezone.utc)
         job_id = uuid4()
         job = {
@@ -67,6 +68,7 @@ class _MaskingPool:
             "sampling_config": sampling_config,
             "webhook_url": webhook_url,
             "webhook_enabled": webhook_enabled or False,
+            "webhook_payload_template": webhook_payload_template,
         }
         self._jobs[str(job_id)] = job
         return job

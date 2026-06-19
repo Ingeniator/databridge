@@ -41,15 +41,24 @@ class LocalJsonlSink(BaseSink):
         dataset: str,
         record: dict,
         filename: str | None = None,
-    ) -> None:
+    ) -> str:
+        raw = record.get("data")
+        if raw is not None and isinstance(raw, str):
+            suffix = f"_{self._job_id}" if self._job_id else ""
+            asset_dir = self._path / f"{dataset}{suffix}"
+            asset_dir.mkdir(parents=True, exist_ok=True)
+            fname = filename or "asset"
+            (asset_dir / fname).write_bytes(bytes.fromhex(raw))
+            return f"{dataset}{suffix}/{fname}"
         if dataset not in self._handles:
             await self.create_dataset(dataset)
         try:
             line = json.dumps(record)
         except (TypeError, ValueError):
             self.records_skipped += 1
-            return
+            return ""
         self._handles[dataset].write(line + "\n")
+        return ""
 
     async def finalise(self) -> None:
         for fh in self._handles.values():

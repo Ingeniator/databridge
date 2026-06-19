@@ -130,6 +130,8 @@ class ExportJobResponse(BaseModel):
     webhook_url: str | None = None
     webhook_enabled: bool = False
     webhook_payload_template: str | None = None
+    download_url: str = ""
+    assets_download_url: str | None = None
 
 
 class ExportJobListResponse(BaseModel):

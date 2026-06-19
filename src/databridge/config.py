@@ -29,7 +29,7 @@ _SYSTEM_SOURCE_VALID_KEYS = {
     "name", "type", "url", "bucket", "region", "access_key_id", "secret_access_key",
     "key_prefix", "addressing_style", "presign_expiry", "database", "table",
     "user", "password", "catalog", "schema_name", "endpoint", "public_endpoint",
-    "duckdb_temp_dir", "search_column",
+    "duckdb_temp_dir", "search_column", "timestamp_column",
 }
 
 @dataclass(frozen=True)
@@ -53,6 +53,7 @@ class SystemSourceConfig:
     catalog: str = ""
     schema_name: str = ""
     search_column: str = "message"
+    timestamp_column: str = "timestamp"
     duckdb_temp_dir: str = "/tmp/duckdb_temp"
 
     @property
