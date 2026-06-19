@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 from uuid import UUID
 
 import structlog
+from arq.connections import RedisSettings
 
 from databridge.export.db import (
     get_export_job,
@@ -241,5 +242,31 @@ async def run_export_job(ctx: dict, job_id: str) -> None:
         )
         EXPORT_JOBS_FAILED.labels(org_id=org_id, sink_type=datasink_config.type if datasink_config else "unknown").inc()
         EXPORT_ACTIVE_JOBS.labels(org_id=org_id).dec()
+
+
+async def startup(ctx: dict) -> None:
+    from databridge.config import get_settings
+    from databridge.db.pool import create_pool
+    from databridge.logging_config import setup_logging
+    settings = get_settings()
+    setup_logging(debug=settings.server.debug, silence_probes=settings.server.silence_probes)
+    ctx["pool"] = await create_pool()
+    ctx["settings"] = settings
+
+
+async def shutdown(ctx: dict) -> None:
+    await ctx["pool"].close()
+
+
+def _redis_settings() -> RedisSettings:
+    from databridge.config import get_settings
+    return RedisSettings.from_dsn(get_settings().export.redis_url)
+
+
+class WorkerSettings:
+    functions = [run_export_job]
+    on_startup = startup
+    on_shutdown = shutdown
+    redis_settings = _redis_settings()
 
 

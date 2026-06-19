@@ -1,7 +1,10 @@
-.PHONY: dev dev-up dev-down test test-unit test-integration test-e2e migrate lint
+.PHONY: dev dev-worker dev-up dev-down test test-unit test-integration test-e2e migrate lint
 
 dev:
 	uv run uvicorn databridge.main:app --host 0.0.0.0 --port 5010 --reload
+
+dev-worker:
+	uv run arq databridge.export.worker.WorkerSettings
 
 dev-up:
 	docker compose -f docker-compose.dev.yml up -d

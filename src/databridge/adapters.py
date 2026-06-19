@@ -129,11 +129,19 @@ class BaseAdapter:
         return (url or "").rstrip("/")
 
     def _creds_dict(self) -> dict:
+        # For system sources conn is a dataclass — use its fields as base so
+        # adapters can read user/password/database/table without special-casing.
+        base: dict = {}
+        if not isinstance(self._conn, dict):
+            import dataclasses as _dc
+            if _dc.is_dataclass(self._conn):
+                base = _dc.asdict(self._conn)
+
         if isinstance(self._creds, dict):
-            return self._creds
+            return {**base, **self._creds}
         if hasattr(self._creds, "model_dump"):
-            return self._creds.model_dump()
-        return {}
+            return {**base, **self._creds.model_dump()}
+        return base
 
     async def ping(self) -> None:
         if self._health_path is None:
