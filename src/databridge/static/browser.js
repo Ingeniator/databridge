@@ -102,8 +102,8 @@
   function renderConnectionTabBar() {
     const inner = document.getElementById('conn-tab-bar-inner');
     const addBtn = document.getElementById('add-connection-tab-btn');
-    // Remove existing tabs (keep add button)
-    Array.from(inner.querySelectorAll('.conn-tab:not(#add-connection-tab-btn)')).forEach(el => el.remove());
+    // Remove existing tab wrappers (keep add button)
+    Array.from(inner.querySelectorAll('.group\\/tab')).forEach(el => el.remove());
 
     const all = [
       ..._connections.map(c => ({ ...c, isSystem: false })),
@@ -111,6 +111,9 @@
     ];
 
     all.forEach(conn => {
+      const wrap = document.createElement('div');
+      wrap.className = 'relative group/tab flex items-end';
+
       const btn = document.createElement('button');
       const isActive = conn.id == _activeId;
       btn.className = 'conn-tab' + (isActive ? ' conn-tab--active' : '');
@@ -124,7 +127,19 @@
       `;
       btn.addEventListener('click', () => selectConnection(conn.id, conn.isSystem));
       btn.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') selectConnection(conn.id, conn.isSystem); });
-      inner.insertBefore(btn, addBtn);
+      wrap.appendChild(btn);
+
+      if (!conn.isSystem) {
+        const editBtn = document.createElement('button');
+        editBtn.className = 'absolute -top-2 -right-2 hidden group-hover/tab:flex items-center justify-center w-5 h-5 rounded-full bg-surface-container border border-outline-variant/30 text-on-surface-variant hover:text-primary hover:border-primary/50 transition-colors z-10';
+        editBtn.title = 'Edit connection';
+        editBtn.setAttribute('tabindex', '0');
+        editBtn.innerHTML = '<span class="material-symbols-outlined text-[12px]">edit</span>';
+        editBtn.addEventListener('click', e => { e.stopPropagation(); openEditModal(conn.id); });
+        wrap.appendChild(editBtn);
+      }
+
+      inner.insertBefore(wrap, addBtn);
     });
   }
 
@@ -140,6 +155,7 @@
     _visibleColumns = null;
 
     renderConnectionTabBar();
+    renderSchemaSection({});
     clearPreviewTable();
     updateHealthBadge('SYNCING…', 'syncing');
     updateLastSynced('Detecting schema…');
@@ -1085,7 +1101,7 @@
     document.getElementById('conn-label-input').focus();
   }
 
-  function openEditModal(id) {
+  async function openEditModal(id) {
     const conn = _connections.find(c => c.id === id);
     if (!conn) return;
     _editingId = id;
@@ -1097,6 +1113,15 @@
     document.getElementById('conn-url-input').value = conn.connection_url;
     updateCredFields();
     document.getElementById('conn-modal').classList.remove('hidden');
+
+    try {
+      const creds = await api('GET', `/api/v1/connections/${id}/credentials`);
+      const fields = CRED_FIELDS[conn.type] || [];
+      fields.forEach(f => {
+        const el = document.getElementById('cred-' + f.key);
+        if (el && creds[f.key] != null) el.value = creds[f.key];
+      });
+    } catch (_) {}
   }
 
   function closeModal() {
@@ -1133,7 +1158,13 @@
     const creds = _gatherCredentials(type);
     try {
       const r = await api('POST', '/api/v1/connections/test', { type, connection_url: url, credentials: creds });
-      showSuccess(`${r.status} (${r.latency_ms}ms)`);
+      if (r.status === 'unreachable') {
+        showError(`Unreachable: ${r.error || 'connection refused'}`);
+      } else if (r.auth_ok === false) {
+        showError(`Reachable but credentials rejected: ${r.auth_error || 'authentication failed'}`);
+      } else {
+        showSuccess(`Reachable · credentials OK (${r.latency_ms}ms)`);
+      }
     } catch (e) {
       showError('Test failed: ' + e.message);
     }

@@ -87,6 +87,8 @@ class PingResponse(BaseModel):
     status: Literal["reachable", "unreachable"]
     latency_ms: float | None = None
     error: str | None = None
+    auth_ok: bool | None = None       # None = not checked; True/False = credentials verified
+    auth_error: str | None = None
 
 
 # ── Pre-save test ─────────────────────────────────────────────────────────────

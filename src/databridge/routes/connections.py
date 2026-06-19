@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import time
 from datetime import datetime, timezone
 from uuid import UUID
@@ -103,9 +104,17 @@ async def test_connection(
     t0 = time.perf_counter()
     try:
         await adapter.ping()
-        return PingResponse(status="reachable", latency_ms=round((time.perf_counter() - t0) * 1000, 1))
     except Exception as exc:
         return PingResponse(status="unreachable", error=str(exc))
+
+    latency_ms = round((time.perf_counter() - t0) * 1000, 1)
+
+    # Verify credentials by fetching the schema (ping alone doesn't require auth)
+    try:
+        await adapter.schema(None, None)
+        return PingResponse(status="reachable", latency_ms=latency_ms, auth_ok=True)
+    except Exception as exc:
+        return PingResponse(status="reachable", latency_ms=latency_ms, auth_ok=False, auth_error=str(exc))
 
 
 # ── CRUD ─────────────────────────────────────────────────────────────────────
@@ -149,6 +158,17 @@ async def get_one_connection(
     return _row_to_response(row)
 
 
+_SECRET_KEYS = re.compile(r"password|secret|token|key", re.IGNORECASE)
+
+
+@router.get("/connections/{id}/credentials")
+async def get_connection_credentials(
+    row: asyncpg.Record = Depends(get_connection_or_404),
+) -> dict:
+    creds = decrypt_credentials(bytes(row["credentials_enc"]))
+    return {k: v for k, v in creds.items() if not _SECRET_KEYS.search(k)}
+
+
 @router.patch("/connections/{id}", response_model=ConnectionResponse)
 async def patch_connection(
     id: UUID,
@@ -156,12 +176,20 @@ async def patch_connection(
     auth: AuthContext = Depends(get_auth),
     pool: asyncpg.Pool = Depends(get_pool),
 ) -> ConnectionResponse:
-    # block patching system sources
     settings = get_settings()
     if any(str(s.id) == str(id) for s in settings.datasources):
         raise HTTPException(status_code=404, detail="connection not found")
 
-    creds_enc = encrypt_credentials(_creds_to_dict(body.credentials)) if body.credentials else None
+    creds_enc: bytes | None = None
+    if body.credentials:
+        row = await get_connection(pool, id=id, owner_key=auth.public_key)
+        if row is None:
+            raise HTTPException(status_code=404, detail="connection not found")
+        existing = decrypt_credentials(bytes(row["credentials_enc"]))
+        incoming = _creds_to_dict(body.credentials)
+        merged = {**existing, **{k: v for k, v in incoming.items() if v not in (None, "")}}
+        creds_enc = encrypt_credentials(merged)
+
     row = await update_connection(pool, id=id, owner_key=auth.public_key, label=body.label, credentials_enc=creds_enc)
     if row is None:
         raise HTTPException(status_code=404, detail="connection not found")

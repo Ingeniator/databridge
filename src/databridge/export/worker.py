@@ -162,6 +162,7 @@ async def run_export_job(ctx: dict, job_id: str) -> None:
             if _limit_reached:
                 break
             records = await adapter.fetch_page(query, start, end, limit=batch_size, offset=offset)
+            logger.info("export_batch_fetched", job_id=job_id, offset=offset, batch_size=batch_size, returned=len(records))
             for record in records:
                 # Sampling filter
                 if sampling_buffer is not None:
