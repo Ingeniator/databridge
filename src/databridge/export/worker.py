@@ -59,6 +59,10 @@ async def run_export_job(ctx: dict, job_id: str) -> None:
         )
         return
 
+    webhook_url: str | None = None
+    webhook_enabled: bool = False
+    webhook_payload_template: str | None = None
+
     try:
         await update_export_job_status(pool, UUID(job_id), ExportJobStatus.running)
         EXPORT_ACTIVE_JOBS.labels(org_id=org_id).inc()
@@ -137,13 +141,13 @@ async def run_export_job(ctx: dict, job_id: str) -> None:
         sampling_config_obj = _parse_sampling_config(job_resp.get("sampling_config"))
         webhook_url = job_resp.get("webhook_url")
         webhook_enabled = job_resp.get("webhook_enabled", False)
+        webhook_payload_template = job_resp.get("webhook_payload_template")
 
         sampling_buffer = None
-        max_items = None
+        max_items = sampling_config_obj.max_items if sampling_config_obj is not None else None
         if sampling_config_obj is not None:
             from databridge.export.sampling import SamplingBuffer
             sampling_buffer = SamplingBuffer(sampling_config_obj)
-            max_items = sampling_config_obj.max_items
 
         # Batch loop
         batch_size = settings.export.batch_size
@@ -225,13 +229,20 @@ async def run_export_job(ctx: dict, job_id: str) -> None:
 
         # Webhook on completion
         if webhook_enabled and webhook_url:
-            from databridge.export.webhook import deliver_webhook
+            from databridge.export.webhook import deliver_webhook, render_payload
             import asyncio as _asyncio
-            _asyncio.create_task(deliver_webhook(webhook_url, {
+            _download_url = _build_download_url(settings, job_id, datasink_config)
+            _ctx = {
                 "job_id": job_id,
                 "status": "completed",
+                "org_id": org_id,
+                "destination_dataset": job_resp.get("destination_dataset", ""),
                 "records_processed": records_processed,
-            }))
+                "records_skipped": records_skipped,
+                "error": "",
+                "download_url": _download_url,
+            }
+            _asyncio.create_task(deliver_webhook(webhook_url, render_payload(webhook_payload_template, _ctx)))
             WEBHOOK_DELIVERY.labels(org_id=org_id, status="success").inc()
 
     except Exception as exc:
@@ -241,6 +252,35 @@ async def run_export_job(ctx: dict, job_id: str) -> None:
         )
         EXPORT_JOBS_FAILED.labels(org_id=org_id, sink_type=datasink_config.type if datasink_config else "unknown").inc()
         EXPORT_ACTIVE_JOBS.labels(org_id=org_id).dec()
+
+        if webhook_enabled and webhook_url:
+            from databridge.export.webhook import deliver_webhook, render_payload
+            import asyncio as _asyncio
+            _ctx = {
+                "job_id": job_id,
+                "status": "failed",
+                "org_id": org_id,
+                "destination_dataset": job_resp.get("destination_dataset", "") if job_resp else "",
+                "records_processed": records_processed,
+                "records_skipped": records_skipped,
+                "error": str(exc),
+                "download_url": "",
+            }
+            _asyncio.create_task(deliver_webhook(webhook_url, render_payload(webhook_payload_template, _ctx)))
+            WEBHOOK_DELIVERY.labels(org_id=org_id, status="success").inc()
+
+
+_LOCAL_SINK_TYPES = {"local-zip", "local-jsonl"}
+
+
+def _build_download_url(settings, job_id: str, datasink_config) -> str:
+    if datasink_config is None:
+        return ""
+    if datasink_config.type in _LOCAL_SINK_TYPES:
+        base = settings.server.public_url.rstrip("/")
+        path = f"/api/v1/export-jobs/{job_id}/download"
+        return f"{base}{path}" if base else path
+    return datasink_config.url or ""
 
 
 async def startup(ctx: dict) -> None:

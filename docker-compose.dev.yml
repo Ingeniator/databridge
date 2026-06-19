@@ -43,6 +43,44 @@ services:
       timeout: 3s
       retries: 10
 
+  minio:
+    image: minio/minio:latest
+    command: server /data --console-address ":9001"
+    ports:
+      - "9200:9000"   # S3 API (9000 offset to avoid clash with clickhouse native port)
+      - "9201:9001"   # MinIO web console
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    volumes:
+      - minio_data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:9000/minio/health/live || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 15
+
+  minio-seed:
+    image: minio/mc:latest
+    depends_on:
+      minio:
+        condition: service_healthy
+    restart: "no"
+    entrypoint: >
+      /bin/sh -c "
+        mc alias set local http://minio:9000 minioadmin minioadmin &&
+        mc mb --ignore-existing local/test-media &&
+        mc anonymous set download local/test-media &&
+        printf 'fake-mp4-content' > /tmp/clip.mp4 &&
+        printf 'fake-jpg-content' > /tmp/photo.jpg &&
+        printf 'fake-mp3-content' > /tmp/audio.mp3 &&
+        mc cp /tmp/clip.mp4  local/test-media/clip.mp4  &&
+        mc cp /tmp/photo.jpg local/test-media/photo.jpg &&
+        mc cp /tmp/audio.mp3 local/test-media/audio.mp3 &&
+        echo 'S3 seed complete'
+      "
+
 volumes:
   postgres_data:
   clickhouse_data:
+  minio_data:

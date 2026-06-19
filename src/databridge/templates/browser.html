@@ -584,6 +584,17 @@
                     oninput="window.DB.onWebhookUrlChange(this.value)" />
                 </div>
               </div>
+              <div class="space-y-1.5">
+                <div class="flex items-center justify-between">
+                  <label class="text-[10px] font-label font-bold uppercase tracking-widest text-on-surface-variant">Payload Template <span class="normal-case font-normal text-on-surface-variant/60">(optional)</span></label>
+                  <span class="text-[10px] text-on-surface-variant/50 font-mono">{{job_id}} {{status}} {{org_id}} {{destination_dataset}} {{records_processed}} {{records_skipped}} {{error}} {{download_url}}</span>
+                </div>
+                <textarea id="webhook-payload-input"
+                  class="w-full bg-surface-container-low border-none rounded-xl py-3 px-4 text-sm font-mono focus:ring-1 focus:ring-primary/20 resize-y min-h-[80px]"
+                  data-testid="webhook-payload-input"
+                  placeholder='{"text": "Job {{job_id}} {{status}} — {{records_processed}} records"}'
+                  oninput="window.DB.onWebhookPayloadChange(this.value)"></textarea>
+              </div>
             </div>
             <div class="md:col-span-4">
               <button id="test-webhook-btn"

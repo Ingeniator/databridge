@@ -22,6 +22,7 @@ class ServerConfig:
     debug: bool = False
     silence_probes: bool = True
     hide_auth_inputs: bool = False
+    public_url: str = ""  # e.g. https://databridge.example.com — used for {{download_url}} in webhook templates
 
 
 _SYSTEM_SOURCE_VALID_KEYS = {
@@ -88,7 +89,7 @@ class ExportSettings:
 
 _SETTINGS_VALID_KEYS = {"server", "database_url", "encryption_key", "datasources", "datasinks", "export"}
 _SERVER_VALID_KEYS = {
-    "host", "port", "workers", "root_path", "debug", "silence_probes", "hide_auth_inputs",
+    "host", "port", "workers", "root_path", "debug", "silence_probes", "hide_auth_inputs", "public_url",
 }
 _EXPORT_VALID_KEYS = {
     "stale_job_timeout_minutes", "max_concurrent_jobs_per_org", "job_ttl_days",

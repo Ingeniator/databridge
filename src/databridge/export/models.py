@@ -81,6 +81,7 @@ class ExportJob(BaseModel):
     sampling_config: SamplingConfig | None = None
     webhook_url: str | None = None
     webhook_enabled: bool = False
+    webhook_payload_template: str | None = None
 
 
 class ExportJobCreate(BaseModel):
@@ -98,6 +99,7 @@ class ExportJobCreate(BaseModel):
     sampling_config: SamplingConfig | None = None
     webhook_url: str | None = None
     webhook_enabled: bool = False
+    webhook_payload_template: str | None = None
 
 
 class ExportJobResponse(BaseModel):
@@ -127,6 +129,7 @@ class ExportJobResponse(BaseModel):
     sampling_config: SamplingConfig | None = None
     webhook_url: str | None = None
     webhook_enabled: bool = False
+    webhook_payload_template: str | None = None
 
 
 class ExportJobListResponse(BaseModel):

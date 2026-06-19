@@ -73,6 +73,7 @@ def _row_to_response(row: asyncpg.Record) -> ExportJobResponse:
         sampling_config=sampling_config,
         webhook_url=row.get("webhook_url"),
         webhook_enabled=row.get("webhook_enabled", False),
+        webhook_payload_template=row.get("webhook_payload_template"),
     )
 
 
@@ -98,8 +99,8 @@ async def insert_export_job(
             datasink_name, destination_dataset,
             asset_resolution, asset_url_fields, asset_url_prefix,
             asset_datasink_name, asset_dataset,
-            masking_rules, sampling_config, webhook_url, webhook_enabled
-        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
+            masking_rules, sampling_config, webhook_url, webhook_enabled, webhook_payload_template
+        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)
         RETURNING *
         """,
         org_id,
@@ -118,6 +119,7 @@ async def insert_export_job(
         sampling_config_json,
         data.webhook_url,
         data.webhook_enabled,
+        data.webhook_payload_template,
     )
     return _row_to_response(row)
 

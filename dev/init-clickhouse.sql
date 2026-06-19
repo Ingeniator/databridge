@@ -35,3 +35,20 @@ INSERT INTO default.llogr_events VALUES
     ('sess-009', '2026-05-31 17:00:15', 'claude-sonnet', 400,  550, 0.0495, 'SELECT * FROM users WHERE…',         0),
     ('sess-010', '2026-05-31 18:00:00', 'gpt-4o',        200,   80, 0.0088, 'Is this sentence grammatical?',      1),
     ('sess-010', '2026-05-31 18:00:02', 'gpt-4o',         80,   20, 0.0022, 'Yes, the sentence is correct.',      1);
+
+-- Media events table — used for asset resolution UI tests (media_url/thumbnail_url → MinIO)
+CREATE TABLE IF NOT EXISTS default.media_events
+(
+    id             String,
+    recorded_at    DateTime,
+    title          String,
+    media_url      String,
+    thumbnail_url  String
+)
+ENGINE = MergeTree()
+ORDER BY (recorded_at, id);
+
+INSERT INTO default.media_events VALUES
+    ('item-001', '2026-06-01 10:00:00', 'Product demo', 'http://localhost:9200/test-media/clip.mp4',  'http://localhost:9200/test-media/photo.jpg'),
+    ('item-002', '2026-06-01 11:00:00', 'Tutorial',     'http://localhost:9200/test-media/clip.mp4',  'http://localhost:9200/test-media/photo.jpg'),
+    ('item-003', '2026-06-01 12:00:00', 'Interview',    'http://localhost:9200/test-media/audio.mp3', 'http://localhost:9200/test-media/photo.jpg');

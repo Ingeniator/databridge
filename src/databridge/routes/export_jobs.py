@@ -7,6 +7,7 @@ import asyncpg
 import structlog
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import FileResponse
+from pydantic import BaseModel
 
 from databridge.auth import AuthContext, get_auth
 from databridge.config import get_settings
@@ -137,6 +138,7 @@ async def retry_export_job(
         sampling_config=original.sampling_config,
         webhook_url=original.webhook_url,
         webhook_enabled=original.webhook_enabled,
+        webhook_payload_template=original.webhook_payload_template,
     )
     new_job = await insert_export_job(pool, new_job_data, org_id=auth.org_id, user_id=auth.user_id)
 
@@ -214,6 +216,34 @@ async def download_export(
         filename=filepath.name,
         media_type=_MEDIA_TYPES[datasink_cfg.type],
     )
+
+
+class _WebhookTestRequest(BaseModel):
+    url: str
+    template: str | None = None
+
+
+@router.post("/api/v1/export-jobs/test-webhook", status_code=204)
+async def test_webhook_endpoint(
+    body: _WebhookTestRequest,
+    auth: AuthContext = Depends(get_auth),
+) -> None:
+    import httpx
+    from databridge.export.webhook import render_payload
+
+    _ctx = {
+        "job_id": "job_id", "status": "status", "org_id": "org_id",
+        "destination_dataset": "destination_dataset", "records_processed": "records_processed",
+        "records_skipped": "records_skipped", "error": "error", "download_url": "download_url",
+    }
+    payload = render_payload(body.template, _ctx) if body.template else {"status": "test", "message": "Webhook test from DataBridge"}
+
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            r = await client.post(body.url, json=payload)
+            r.raise_for_status()
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Webhook delivery failed: {exc}")
 
 
 # Module-level reference to ARQ pool, set by lifespan

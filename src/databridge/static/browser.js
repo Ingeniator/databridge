@@ -16,7 +16,19 @@
   let _totalCount = 0;
   let _maskingRules = [];  // [{ field_path, action }]
   let _samplingConfig = null;  // { method, target_column, ratio_or_size }
-  let _webhookConfig = { url: '', enabled: false };
+  const _DEFAULT_WEBHOOK_TEMPLATE = `{
+  "text": "Export *{{destination_dataset}}* {{status}}",
+  "attachments": [{
+    "fields": [
+      {"title": "Job ID", "value": "{{job_id}}", "short": true},
+      {"title": "Records", "value": "{{records_processed}}", "short": true},
+      {"title": "Download", "value": "<{{download_url}}|Download result>", "short": false},
+      {"title": "Error", "value": "{{error}}", "short": false}
+    ]
+  }]
+}`;
+
+  let _webhookConfig = { url: '', enabled: false, payloadTemplate: _DEFAULT_WEBHOOK_TEMPLATE };
   let _assetResolution = false;
   let _assetUrlFields = [];
   let _assetUrlPrefix = '';
@@ -899,6 +911,7 @@
       sampling_config: document.getElementById('sampling-toggle')?.checked ? _samplingConfig : null,
       webhook_url: _webhookConfig.url || null,
       webhook_enabled: _webhookConfig.enabled,
+      webhook_payload_template: _webhookConfig.payloadTemplate || null,
     };
 
     try {
@@ -913,12 +926,14 @@
   // ── Webhook ────────────────────────────────────────────────────────────────
   function onWebhookToggle(checked) { _webhookConfig.enabled = checked; }
   function onWebhookUrlChange(value) { _webhookConfig.url = value; }
+  function onWebhookPayloadChange(value) { _webhookConfig.payloadTemplate = value; }
 
   async function testWebhook() {
     const url = document.getElementById('webhook-url-input')?.value;
     if (!url) { showError('Enter a webhook URL first.'); return; }
+    const template = _webhookConfig.payloadTemplate || null;
     try {
-      await api('POST', '/api/v1/export-jobs/test-webhook', { url });
+      await api('POST', '/api/v1/export-jobs/test-webhook', { url, template });
       showSuccess('Webhook test sent successfully.');
     } catch (e) {
       showError('Webhook test failed: ' + e.message);
@@ -1232,6 +1247,9 @@
       }
     } catch (e) { /* ignore */ }
 
+    const payloadEl = document.getElementById('webhook-payload-input');
+    if (payloadEl) payloadEl.value = _DEFAULT_WEBHOOK_TEMPLATE;
+
     await loadConnections();
     await loadDatasinks();
   }
@@ -1290,6 +1308,7 @@
     startExport,
     onWebhookToggle,
     onWebhookUrlChange,
+    onWebhookPayloadChange,
     testWebhook,
     _retryJob,
     _cancelJob,
