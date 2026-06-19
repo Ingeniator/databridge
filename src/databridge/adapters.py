@@ -29,7 +29,7 @@ def _query_to_sql(expr: str, search_column: str) -> str | None:
     if not expr:
         return None
 
-    tokens = re.split(r"\s+(AND|OR)\s+", expr, flags=re.IGNORECASE)
+    tokens = re.split(r"\s+(?:AND|OR)\s+", expr, flags=re.IGNORECASE)
     logic_ops = re.findall(r"\s+(AND|OR)\s+", expr, flags=re.IGNORECASE)
 
     sql_parts: list[str] = []
@@ -274,7 +274,37 @@ class ClickHouseConnectionAdapter(BaseAdapter):
         limit: int,
         offset: int,
     ) -> list[dict]:
-        return await self.preview(query, start, end, limit)
+        creds = self._creds_dict()
+        user = creds.get("user", "")
+        password = creds.get("password", "")
+        database = creds.get("database", "default")
+        table = creds.get("table", "llogr_events")
+        search_column = creds.get("search_column", "message")
+        conditions: list[str] = []
+        if sql_cond := _query_to_sql(query, search_column):
+            conditions.append(sql_cond)
+        if start:
+            conditions.append(f"timestamp >= parseDateTimeBestEffort('{start.isoformat()}')")
+        if end:
+            conditions.append(f"timestamp < parseDateTimeBestEffort('{end.isoformat()}')")
+        where = f" WHERE {' AND '.join(conditions)}" if conditions else ""
+        sql = f"SELECT * FROM {database}.{table}{where} LIMIT {limit} OFFSET {offset} FORMAT JSONEachRow"
+        params: dict = {"query": sql}
+        if user:
+            params["user"] = user
+            params["password"] = password
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            r = await client.get(self._url + "/", params=params)
+            r.raise_for_status()
+        results: list[dict] = []
+        for line in r.text.strip().splitlines():
+            line = line.strip()
+            if line:
+                try:
+                    results.append(json.loads(line))
+                except json.JSONDecodeError:
+                    pass
+        return results
 
     async def schema(self, start: datetime | None, end: datetime | None) -> tuple[dict[str, dict], int]:
         return await super().schema(start, end)

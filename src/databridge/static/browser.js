@@ -381,6 +381,7 @@
             <option value="<" ${r.op==='<' ? 'selected' : ''}>&lt;</option>
             <option value=">=" ${r.op==='>=' ? 'selected' : ''}>&ge;</option>
             <option value="<=" ${r.op==='<=' ? 'selected' : ''}>&le;</option>
+            <option value="contains" ${r.op==='contains' ? 'selected' : ''}>contains</option>
           </select>
           <span class="absolute right-1.5 top-1/2 -translate-y-1/2 material-symbols-outlined text-[12px] text-outline-variant pointer-events-none">expand_more</span>
         </div>

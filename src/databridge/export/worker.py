@@ -192,9 +192,6 @@ async def run_export_job(ctx: dict, job_id: str) -> None:
                     _limit_reached = True
                     break
 
-            if hasattr(sink, "records_skipped"):
-                records_skipped += sink.records_skipped
-
             await update_export_progress(pool, UUID(job_id), records_processed, records_skipped, asset_errors)
 
             if await is_job_cancelled(pool, UUID(job_id)):
@@ -212,6 +209,8 @@ async def run_export_job(ctx: dict, job_id: str) -> None:
             if (time.monotonic() - batch_start) > keepalive_interval:
                 batch_start = time.monotonic()
 
+        if hasattr(sink, "records_skipped"):
+            records_skipped += sink.records_skipped
         await sink.finalise()
         if asset_sink:
             await asset_sink.finalise()
