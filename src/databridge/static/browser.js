@@ -780,9 +780,9 @@
     const method = document.getElementById('sampling-method-select')?.value || 'random';
     const ratio = parseFloat(document.getElementById('sampling-ratio')?.value || '0.1');
     const target = document.getElementById('sampling-target-column')?.value || null;
-    const maxTracesRaw = document.getElementById('sampling-max-traces')?.value;
-    const max_traces = maxTracesRaw ? parseInt(maxTracesRaw, 10) : null;
-    _samplingConfig = { method, ratio_or_size: ratio, target_column: target || null, max_traces };
+    const maxItemsRaw = document.getElementById('sampling-max-items')?.value;
+    const max_items = maxItemsRaw ? parseInt(maxItemsRaw, 10) : null;
+    _samplingConfig = { method, ratio_or_size: ratio, target_column: target || null, max_items };
   }
 
   // ── Export destination ─────────────────────────────────────────────────────
@@ -1005,22 +1005,7 @@
 </div>`;
       }).join('');
 
-      // Update only rows that exist or insert new
-      const existing = list.querySelectorAll('.job-row');
-      if (existing.length !== jobs.length) {
-        list.innerHTML = html + document.getElementById('jobs-empty-msg').outerHTML;
-      } else {
-        // Update status badges
-        jobs.forEach(job => {
-          const statusEl = document.querySelector(`[data-testid="job-status-${job.id}"]`);
-          if (statusEl) {
-            statusEl.textContent = job.status.toUpperCase();
-            statusEl.className = (JOB_STATUS_CLASS[job.status] || 'status-badge') + ' font-label';
-          }
-          const progressEl = document.querySelector(`[data-testid="job-progress-${job.id}"]`);
-          if (progressEl) progressEl.textContent = `${job.records_processed} / ${job.records_total ?? '?'} records`;
-        });
-      }
+      list.innerHTML = html + document.getElementById('jobs-empty-msg').outerHTML;
     } catch (e) {
       // Silently ignore polling errors
     }

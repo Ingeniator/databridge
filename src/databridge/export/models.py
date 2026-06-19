@@ -38,7 +38,7 @@ class SamplingConfig(BaseModel):
     method: SamplingMethod = SamplingMethod.random
     target_column: str | None = None
     ratio_or_size: float = Field(gt=0.0)
-    max_traces: int | None = Field(default=None, gt=0)
+    max_items: int | None = Field(default=None, gt=0)
 
 
 class PiiFieldsResponse(BaseModel):

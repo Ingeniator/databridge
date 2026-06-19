@@ -139,11 +139,11 @@ async def run_export_job(ctx: dict, job_id: str) -> None:
         webhook_enabled = job_resp.get("webhook_enabled", False)
 
         sampling_buffer = None
-        max_traces = None
+        max_items = None
         if sampling_config_obj is not None:
             from databridge.export.sampling import SamplingBuffer
             sampling_buffer = SamplingBuffer(sampling_config_obj)
-            max_traces = sampling_config_obj.max_traces
+            max_items = sampling_config_obj.max_items
 
         # Batch loop
         batch_size = settings.export.batch_size
@@ -188,7 +188,7 @@ async def run_export_job(ctx: dict, job_id: str) -> None:
                 await sink.post_file(destination_dataset, record)
                 records_processed += 1
 
-                if max_traces and records_processed >= max_traces:
+                if max_items and records_processed >= max_items:
                     _limit_reached = True
                     break
 
