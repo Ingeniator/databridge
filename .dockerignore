@@ -1,0 +1,8 @@
+.coverage
+.git
+.pytest_cache
+.ruff_cache
+.venv
+__pycache__
+htmlcov
+*.pyc
