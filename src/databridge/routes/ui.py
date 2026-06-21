@@ -34,9 +34,12 @@ async def ui_config() -> UiConfigResponse:
 
 @router.get("/", response_class=HTMLResponse)
 async def index() -> HTMLResponse:
+    settings = get_settings()
+    root_path = settings.server.root_path.rstrip("/")
     js_v = _file_hash(_STATIC_DIR / "browser.js")
     css_v = _file_hash(_STATIC_DIR / "browser.css")
     html = (_TEMPLATES_DIR / "browser.html").read_text()
-    html = html.replace('src="/static/browser.js"', f'src="/static/browser.js?v={js_v}"')
-    html = html.replace('href="/static/browser.css"', f'href="/static/browser.css?v={css_v}"')
+    html = html.replace('data-base=""', f'data-base="{root_path}"')
+    html = html.replace('src="/static/browser.js"', f'src="{root_path}/static/browser.js?v={js_v}"')
+    html = html.replace('href="/static/browser.css"', f'href="{root_path}/static/browser.css?v={css_v}"')
     return HTMLResponse(content=html)

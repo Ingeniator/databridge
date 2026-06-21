@@ -1,0 +1,72 @@
+# databridge configuration for the root docker-compose stack.
+
+server:
+  host: "0.0.0.0"
+  port: 5010
+  workers: 1
+  root_path: "/databridge"
+  debug: false
+  silence_probes: true
+  hide_auth_inputs: true
+  public_url: "http://localhost:8888/databridge"
+
+database_url: "postgresql://databridge:databridge@databridge-db:5432/databridge"
+encryption_key: "Ks_7gv0quQuNMvwLHNhToPPgrQw7Z3Zjm2r-4mTJqF4="
+
+export:
+  redis_url: "redis://langfuse-redis:6379/1"
+  webhook_allowed_url_prefixes:
+    - "https://hooks.slack.com/"
+    - "https://webhook.site/"
+    - "http://localhost:"
+    - "http://127.0.0.1:"
+
+datasources:
+  - name: "S3 / MinIO"
+    type: s3
+    endpoint: "http://minio:9000"
+    public_endpoint: "http://localhost:8888/s3"
+    bucket: "llogr-raw-events"
+    region: "us-east-1"
+    access_key_id: "minioadmin"
+    secret_access_key: "minioadmin"
+    addressing_style: "path"
+
+  - name: "ClickHouse"
+    type: clickhouse
+    url: "http://clickhouse:8123"
+    database: "default"
+    table: "llogr_events"
+    user: "default"
+    password: "clickhouse"
+    search_column: "body"
+
+  - name: "Trino"
+    type: trino
+    url: "http://trino:8080"
+    catalog: "clickhouse"
+    schema_name: "default"
+    user: "databridge"
+
+  - name: "Langfuse"
+    type: langfuse
+    url: "http://langfuse-web:3000"
+    access_key_id: "lf-pk-ai-suite"
+    secret_access_key: "lf-sk-ai-suite"
+
+datasinks:
+  - name: "local-zip"
+    type: local-zip
+    path: "/tmp/databridge-exports"
+
+  - name: "local-jsonl"
+    type: local-jsonl
+    path: "/tmp/databridge-exports"
+
+  - name: "dataset-mock"
+    type: dataset-mock
+    url: "http://dataset-mock:9100"
+
+  - name: "annotator-mock"
+    type: annotator-mock
+    url: "http://annotator-mock:8010"

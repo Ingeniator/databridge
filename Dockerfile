@@ -25,6 +25,8 @@ FROM python:3.13-slim AS runtime
 WORKDIR /app
 
 COPY --from=builder /app/.venv /app/.venv
+COPY alembic.ini ./
+COPY src/databridge/db/migrations/ src/databridge/db/migrations/
 COPY config.yaml.example ./config.yaml.example
 
 ENV PATH="/app/.venv/bin:$PATH" \
