@@ -13,8 +13,11 @@ from databridge.logging_config import setup_logging
 async def startup(ctx: dict) -> None:
     from databridge.db.pool import create_pool
     from databridge.export.sweep import run_sweep_loop
+    from prometheus_client import start_http_server
 
     settings = get_settings()
+    if settings.export.worker_metrics_port > 0:
+        start_http_server(settings.export.worker_metrics_port)
     pool = await create_pool()
     ctx["pool"] = pool
     ctx["settings"] = settings

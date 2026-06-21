@@ -27,6 +27,7 @@ WORKDIR /app
 COPY --from=builder /app/.venv /app/.venv
 COPY alembic.ini ./
 COPY src/databridge/db/migrations/ src/databridge/db/migrations/
+COPY worker/ worker/
 COPY config.yaml.example ./config.yaml.example
 
 ENV PATH="/app/.venv/bin:$PATH" \

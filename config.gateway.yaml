@@ -15,6 +15,7 @@ encryption_key: "Ks_7gv0quQuNMvwLHNhToPPgrQw7Z3Zjm2r-4mTJqF4="
 
 export:
   redis_url: "redis://langfuse-redis:6379/1"
+  worker_metrics_port: 9101
   webhook_allowed_url_prefixes:
     - "https://hooks.slack.com/"
     - "https://webhook.site/"

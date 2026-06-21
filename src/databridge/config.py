@@ -86,6 +86,7 @@ class ExportSettings:
     keepalive_interval_minutes: int = 2
     batch_size: int = 100
     redis_url: str = "redis://localhost:6379"
+    worker_metrics_port: int = 9101
     webhook_allowed_url_prefixes: tuple[str, ...] = field(default_factory=tuple)
 
 
@@ -96,7 +97,7 @@ _SERVER_VALID_KEYS = {
 _EXPORT_VALID_KEYS = {
     "stale_job_timeout_minutes", "max_concurrent_jobs_per_org", "job_ttl_days",
     "poll_interval_seconds", "keepalive_interval_minutes", "batch_size", "redis_url",
-    "webhook_allowed_url_prefixes",
+    "worker_metrics_port", "webhook_allowed_url_prefixes",
 }
 
 @dataclass(frozen=True)
