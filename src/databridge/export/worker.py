@@ -12,6 +12,8 @@ from databridge.export.db import (
     is_job_cancelled,
     update_export_job_status,
     update_export_progress,
+    update_external_asset_dataset_id,
+    update_external_dataset_id,
     update_records_total,
     _parse_masking_rules,
     _parse_sampling_config,
@@ -62,6 +64,8 @@ async def run_export_job(ctx: dict, job_id: str) -> None:
     webhook_url: str | None = None
     webhook_enabled: bool = False
     webhook_payload_template: str | None = None
+    records_processed: int = 0
+    records_skipped: int = 0
 
     try:
         await update_export_job_status(pool, UUID(job_id), ExportJobStatus.running)
@@ -88,8 +92,8 @@ async def run_export_job(ctx: dict, job_id: str) -> None:
             if conn_row is None:
                 raise ValueError(f"connection {datasource_ref!r} not found")
             from databridge.adapters import get_adapter
-            from databridge.crypto import decrypt
-            creds = _json.loads(decrypt(bytes(conn_row["credentials_enc"])))
+            from databridge.crypto import decrypt_credentials
+            creds = decrypt_credentials(bytes(conn_row["credentials_enc"]))
             adapter = get_adapter(dict(conn_row), creds)
         else:
             # system source — match by name or deterministic UUID
@@ -114,6 +118,8 @@ async def run_export_job(ctx: dict, job_id: str) -> None:
         await sink.ping()
         destination_dataset = job_resp["destination_dataset"]
         await sink.create_dataset(destination_dataset)
+        if sink.external_id:
+            await update_external_dataset_id(pool, UUID(job_id), sink.external_id)
 
         # Asset resolution setup
         asset_resolution = job_resp["asset_resolution"]
@@ -133,8 +139,12 @@ async def run_export_job(ctx: dict, job_id: str) -> None:
                 )
                 if asset_cfg:
                     asset_sink = get_sink(asset_cfg)
+                    asset_sink._job_id = job_id
                     await asset_sink.ping()
                     await asset_sink.create_dataset(asset_dataset)
+                    ext_asset_id = getattr(asset_sink, "_dataset_ids", {}).get(asset_dataset)
+                    if ext_asset_id:
+                        await update_external_asset_dataset_id(pool, UUID(job_id), ext_asset_id)
 
         # Load masking/sampling/webhook config from job row
         masking_rules = _parse_masking_rules(job_resp.get("masking_rules"))
@@ -152,8 +162,6 @@ async def run_export_job(ctx: dict, job_id: str) -> None:
         # Batch loop
         batch_size = settings.export.batch_size
         keepalive_interval = settings.export.keepalive_interval_minutes * 60
-        records_processed = 0
-        records_skipped = 0
         asset_errors = 0
         batch_start = time.monotonic()
 
@@ -217,8 +225,12 @@ async def run_export_job(ctx: dict, job_id: str) -> None:
         if hasattr(sink, "records_skipped"):
             records_skipped += sink.records_skipped
         await sink.finalise()
+        if sink.external_id:
+            await update_external_dataset_id(pool, UUID(job_id), sink.external_id)
         if asset_sink:
             await asset_sink.finalise()
+            if asset_sink.external_id:
+                await update_external_asset_dataset_id(pool, UUID(job_id), asset_sink.external_id)
 
         if await is_job_cancelled(pool, UUID(job_id)):
             EXPORT_ACTIVE_JOBS.labels(org_id=org_id).dec()
@@ -274,7 +286,7 @@ async def run_export_job(ctx: dict, job_id: str) -> None:
                 "assets_download_url": "",
             }
             _asyncio.create_task(deliver_webhook(webhook_url, render_payload(webhook_payload_template, _ctx)))
-            WEBHOOK_DELIVERY.labels(org_id=org_id, status="success").inc()
+            WEBHOOK_DELIVERY.labels(org_id=org_id, status="failure").inc()
 
 
 _LOCAL_SINK_TYPES = {"local-zip", "local-jsonl"}

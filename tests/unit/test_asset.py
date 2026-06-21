@@ -32,7 +32,7 @@ async def test_resolve_assets_with_prefix():
     from databridge.export.asset import resolve_assets
 
     mock_sink = MagicMock()
-    mock_sink.post_file = AsyncMock()
+    mock_sink.post_file = AsyncMock(return_value=None)
 
     with respx.mock:
         respx.get("https://cdn.example.com/img.png").mock(
@@ -123,7 +123,7 @@ async def test_resolve_assets_s3_media_url():
 
     s3_url = "https://my-bucket.s3.amazonaws.com/media/video.mp4"
     mock_sink = MagicMock()
-    mock_sink.post_file = AsyncMock()
+    mock_sink.post_file = AsyncMock(return_value=None)
 
     with respx.mock:
         respx.get(s3_url).mock(return_value=httpx.Response(200, content=b"\x00\x01\x02\x03"))
@@ -154,7 +154,7 @@ async def test_resolve_assets_s3_presigned_url_with_query_params():
         "?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Expires=3600"
     )
     mock_sink = MagicMock()
-    mock_sink.post_file = AsyncMock()
+    mock_sink.post_file = AsyncMock(return_value=None)
 
     with respx.mock:
         respx.get(s3_presigned).mock(return_value=httpx.Response(200, content=b"jpeg_data"))

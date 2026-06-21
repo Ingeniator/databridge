@@ -62,15 +62,15 @@ def test_get_datasinks_returns_configured(client):
 def test_get_datasink_datasets_returns_list(client):
     """GET /api/v1/datasinks/{name}/datasets returns list."""
     with respx.mock:
-        respx.get(f"{MOCK_SINK_URL}/datasets").mock(
-            return_value=httpx.Response(200, json={"datasets": ["ds1", "ds2"]})
+        respx.get(f"{MOCK_SINK_URL}/_mock/datasets").mock(
+            return_value=httpx.Response(200, json={"datasets": [{"name": "ds1", "id": "uid1"}, {"name": "ds2", "id": "uid2"}]})
         )
         resp = client.get(
             f"/api/v1/datasinks/{MOCK_SINK_NAME}/datasets",
             headers={"X-Group-ID": "org1/user1"},
         )
     assert resp.status_code == 200
-    assert resp.json()["datasets"] == ["ds1", "ds2"]
+    assert len(resp.json()["datasets"]) == 2
 
 
 def test_unknown_sink_name_returns_404(client):
@@ -85,8 +85,34 @@ def test_unknown_sink_name_returns_404(client):
 def test_unreachable_datasink_returns_502(client):
     """Unreachable datasink returns 502."""
     with respx.mock:
-        respx.get(f"{MOCK_SINK_URL}/datasets").mock(
+        respx.get(f"{MOCK_SINK_URL}/_mock/datasets").mock(
             side_effect=httpx.ConnectError("unreachable")
+        )
+        resp = client.get(
+            f"/api/v1/datasinks/{MOCK_SINK_NAME}/datasets",
+            headers={"X-Group-ID": "org1/user1"},
+        )
+    assert resp.status_code == 502
+
+
+def test_timeout_datasink_returns_502(client):
+    """Timeout from datasink returns 502."""
+    with respx.mock:
+        respx.get(f"{MOCK_SINK_URL}/_mock/datasets").mock(
+            side_effect=httpx.TimeoutException("timed out")
+        )
+        resp = client.get(
+            f"/api/v1/datasinks/{MOCK_SINK_NAME}/datasets",
+            headers={"X-Group-ID": "org1/user1"},
+        )
+    assert resp.status_code == 502
+
+
+def test_oserror_datasink_returns_502(client):
+    """OSError from datasink returns 502."""
+    with respx.mock:
+        respx.get(f"{MOCK_SINK_URL}/_mock/datasets").mock(
+            side_effect=OSError("connection reset")
         )
         resp = client.get(
             f"/api/v1/datasinks/{MOCK_SINK_NAME}/datasets",

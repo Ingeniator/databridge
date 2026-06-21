@@ -170,3 +170,48 @@ class TestMaxTraces:
         records = [{"id": i, "cat": "A" if i % 2 == 0 else "B"} for i in range(100)]
         processed, _ = _simulate_worker_loop(records, cfg)
         assert processed == 10
+
+
+class TestCapExactness:
+    """Exactly max_items records are exported when supply is sufficient — never fewer."""
+
+    def test_random_ratio_1_yields_exact_cap(self):
+        cfg = _config(SamplingMethod.random, 1.0, max_items=20)
+        records = [{"id": i} for i in range(100)]
+        processed, _ = _simulate_worker_loop(records, cfg)
+        assert processed == 20
+
+    def test_random_low_ratio_yields_exact_cap_when_data_abundant(self):
+        import random as rng
+        rng.seed(42)
+        # 0.5 ratio over 1 000 records keeps ~500; cap=10 must be hit exactly
+        cfg = _config(SamplingMethod.random, 0.5, max_items=10)
+        records = [{"id": i} for i in range(1000)]
+        processed, _ = _simulate_worker_loop(records, cfg)
+        assert processed == 10
+
+    def test_systematic_yields_exact_cap(self):
+        cfg = _config(SamplingMethod.systematic, 1.0, max_items=15)
+        records = [{"id": i} for i in range(100)]
+        processed, _ = _simulate_worker_loop(records, cfg)
+        assert processed == 15
+
+    def test_stratified_yields_exact_cap(self):
+        cfg = _config(SamplingMethod.stratified, 1.0, target="cat", max_items=12)
+        records = [{"id": i, "cat": "A" if i % 2 == 0 else "B"} for i in range(100)]
+        processed, _ = _simulate_worker_loop(records, cfg)
+        assert processed == 12
+
+    def test_cap_not_applied_when_data_insufficient(self):
+        # Fewer records than cap → all available records exported, none omitted
+        cfg = _config(SamplingMethod.random, 1.0, max_items=100)
+        records = [{"id": i} for i in range(30)]
+        processed, _ = _simulate_worker_loop(records, cfg)
+        assert processed == 30
+
+    def test_cap_one_less_than_input(self):
+        n = 50
+        cfg = _config(SamplingMethod.random, 1.0, max_items=n - 1)
+        records = [{"id": i} for i in range(n)]
+        processed, _ = _simulate_worker_loop(records, cfg)
+        assert processed == n - 1

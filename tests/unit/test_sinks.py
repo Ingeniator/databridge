@@ -38,7 +38,9 @@ async def test_base_sink_is_abstract():
 async def test_dataset_mock_ping():
     from databridge.sinks.dataset_mock import DatasetMockSink
     with respx.mock:
-        respx.get("http://mock:8020/health").mock(return_value=httpx.Response(200))
+        respx.get("http://mock:8020/health").mock(
+            return_value=httpx.Response(200, json={"status": "ok"})
+        )
         sink = DatasetMockSink(_dataset_cfg())
         await sink.ping()
 
@@ -47,19 +49,31 @@ async def test_dataset_mock_ping():
 async def test_dataset_mock_list_datasets():
     from databridge.sinks.dataset_mock import DatasetMockSink
     with respx.mock:
-        respx.get("http://mock:8020/datasets").mock(
-            return_value=httpx.Response(200, json={"datasets": ["ds1", "ds2"]})
+        respx.get("http://mock:8020/_mock/datasets").mock(
+            return_value=httpx.Response(200, json={"datasets": [
+                {"id": "id-1", "name": "ds1"},
+                {"id": "id-2", "name": "ds2"},
+            ], "count": 2})
         )
         sink = DatasetMockSink(_dataset_cfg())
         result = await sink.list_datasets()
-    assert result == ["ds1", "ds2"]
+    assert result == [{"name": "ds1", "uid": "id-1"}, {"name": "ds2", "uid": "id-2"}]
 
 
 @pytest.mark.asyncio
 async def test_dataset_mock_post_file():
     from databridge.sinks.dataset_mock import DatasetMockSink
+    ds_id = "aaaaaaaa-0000-0000-0000-000000000001"
     with respx.mock:
-        respx.post("http://mock:8020/datasets/myds/files").mock(return_value=httpx.Response(201))
+        respx.post("http://mock:8020/realms/test/protocol/openid-connect/token").mock(
+            return_value=httpx.Response(200, json={"access_token": "mock-token", "token_type": "Bearer"})
+        )
+        respx.post("http://mock:8020/api/v0/datasets").mock(
+            return_value=httpx.Response(201, json={"id": ds_id, "name": "myds"})
+        )
+        respx.post(f"http://mock:8020/api/v0/datasets/{ds_id}/files").mock(
+            return_value=httpx.Response(201, json={"id": "fid"})
+        )
         sink = DatasetMockSink(_dataset_cfg())
         await sink.post_file("myds", {"key": "val"}, "file.json")
 
@@ -68,23 +82,48 @@ async def test_dataset_mock_post_file():
 async def test_annotator_mock_list_datasets():
     from databridge.sinks.annotator_mock import AnnotatorMockSink
     with respx.mock:
-        respx.get("http://ann:8010/api/v1/projects").mock(
-            return_value=httpx.Response(200, json=[{"name": "proj1"}, {"name": "proj2"}])
+        respx.get("http://ann:8010/api/v0/markup_project").mock(
+            return_value=httpx.Response(200, json={"items": [{"uid": "p1", "name": "proj1"}, {"uid": "p2", "name": "proj2"}], "has_next": False})
         )
         sink = AnnotatorMockSink(_annotator_cfg())
         result = await sink.list_datasets()
-    assert result == ["proj1", "proj2"]
+    assert result == [{"name": "proj1", "uid": "p1"}, {"name": "proj2", "uid": "p2"}]
 
 
 @pytest.mark.asyncio
-async def test_annotator_mock_post_file():
+async def test_annotator_mock_full_flow():
     from databridge.sinks.annotator_mock import AnnotatorMockSink
+    project_id = "p1111111-0000-0000-0000-000000000001"
+    ds_id = "dddddddd-0000-0000-0000-000000000001"
+    pool_id = "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+    task_id = "tttttttt-0000-0000-0000-000000000001"
     with respx.mock:
-        respx.post("http://ann:8010/api/v1/projects/proj1/tasks").mock(
-            return_value=httpx.Response(201)
+        respx.get("http://ann:8010/api/v0/markup_project").mock(
+            return_value=httpx.Response(200, json={"items": [{"uid": project_id, "name": "proj1"}], "has_next": False})
+        )
+        respx.post("http://ann:8010/api/v0/datasets").mock(
+            return_value=httpx.Response(201, json={"id": ds_id, "name": "proj1-export"})
+        )
+        respx.post(f"http://ann:8010/api/v0/datasets/{ds_id}/files").mock(
+            return_value=httpx.Response(201, json={"id": "fid"})
+        )
+        respx.get("http://ann:8010/api/v0/pools/hardcoded").mock(
+            return_value=httpx.Response(200, json={"pool_id": pool_id})
+        )
+        respx.post(f"http://ann:8010/api/v0/markup_project/{project_id}/pools/{pool_id}").mock(
+            return_value=httpx.Response(204)
+        )
+        respx.post("http://ann:8010/api/v0/tasks").mock(
+            return_value=httpx.Response(201, json={"uid": task_id})
+        )
+        respx.post(f"http://ann:8010/api/v0/tasks/{task_id}/start").mock(
+            return_value=httpx.Response(200, json={"uid": task_id, "state": "RUNNING"})
         )
         sink = AnnotatorMockSink(_annotator_cfg())
-        await sink.post_file("proj1", {"data": "x"}, "task.json")
+        await sink.create_dataset("proj1")
+        await sink.post_file("proj1", {"data": "x"}, "record.json")
+        await sink.finalise()
+    assert sink.external_id == task_id
 
 
 @pytest.mark.asyncio

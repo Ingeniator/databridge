@@ -25,10 +25,10 @@ class LocalJsonlSink(BaseSink):
         except OSError as exc:
             raise OSError(f"Path not writable: {self._path}") from exc
 
-    async def list_datasets(self) -> list[str]:
+    async def list_datasets(self) -> list[dict[str, str]]:
         if not self._path.exists():
             return []
-        return [p.stem for p in self._path.glob("*.jsonl")]
+        return [{"name": p.stem, "uid": p.stem} for p in self._path.glob("*.jsonl")]
 
     async def create_dataset(self, name: str) -> None:
         self._path.mkdir(parents=True, exist_ok=True)

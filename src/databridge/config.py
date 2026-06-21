@@ -86,15 +86,17 @@ class ExportSettings:
     keepalive_interval_minutes: int = 2
     batch_size: int = 100
     redis_url: str = "redis://localhost:6379"
+    webhook_allowed_url_prefixes: tuple[str, ...] = field(default_factory=tuple)
 
 
-_SETTINGS_VALID_KEYS = {"server", "database_url", "encryption_key", "datasources", "datasinks", "export"}
+_SETTINGS_VALID_KEYS = {"server", "database_url", "db_pool_max_size", "encryption_key", "datasources", "datasinks", "export"}
 _SERVER_VALID_KEYS = {
     "host", "port", "workers", "root_path", "debug", "silence_probes", "hide_auth_inputs", "public_url",
 }
 _EXPORT_VALID_KEYS = {
     "stale_job_timeout_minutes", "max_concurrent_jobs_per_org", "job_ttl_days",
     "poll_interval_seconds", "keepalive_interval_minutes", "batch_size", "redis_url",
+    "webhook_allowed_url_prefixes",
 }
 
 @dataclass(frozen=True)
@@ -105,6 +107,7 @@ class Settings:
     datasources: tuple[SystemSourceConfig, ...]
     datasinks: tuple[DatasinkConfig, ...] = field(default_factory=tuple)
     export: ExportSettings = field(default_factory=ExportSettings)
+    db_pool_max_size: int = 10
 
 
 # ── Secret injection ─────────────────────────────────────────────────────────
@@ -232,6 +235,9 @@ def get_settings() -> Settings:
     # export settings
     export_raw = raw.get("export") or {}
     _validate_keys(export_raw, _EXPORT_VALID_KEYS, "export")
+    if "webhook_allowed_url_prefixes" in export_raw:
+        export_raw = dict(export_raw)
+        export_raw["webhook_allowed_url_prefixes"] = tuple(export_raw["webhook_allowed_url_prefixes"])
     export_settings = ExportSettings(**export_raw)
 
     return Settings(
@@ -241,4 +247,5 @@ def get_settings() -> Settings:
         datasources=tuple(sources),
         datasinks=tuple(sinks),
         export=export_settings,
+        db_pool_max_size=raw.get("db_pool_max_size", 10),
     )

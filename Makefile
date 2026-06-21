@@ -1,4 +1,4 @@
-.PHONY: dev dev-worker dev-up dev-down test test-unit test-integration test-e2e migrate lint
+.PHONY: dev dev-worker dev-up dev-down test test-unit test-integration test-e2e coverage migrate lint
 
 dev:
 	uv run uvicorn databridge.main:app --host 0.0.0.0 --port 5010 --reload
@@ -27,6 +27,9 @@ test-integration:
 
 test-e2e:
 	uv run pytest tests/e2e/ -v
+
+coverage:
+	uv run pytest tests/unit/ --cov=src/databridge --cov-report=term-missing --cov-report=html:htmlcov -q
 
 migrate:
 	uv run alembic upgrade head

@@ -28,6 +28,7 @@ async def ui_config() -> UiConfigResponse:
     return UiConfigResponse(
         connection_types=CONNECTION_TYPES,
         hide_auth_inputs=settings.server.hide_auth_inputs,
+        webhook_allowed_url_prefixes=list(settings.export.webhook_allowed_url_prefixes),
     )
 
 

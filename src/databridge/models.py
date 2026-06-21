@@ -151,3 +151,4 @@ class HealthResponse(BaseModel):
 class UiConfigResponse(BaseModel):
     connection_types: list[str]
     hide_auth_inputs: bool
+    webhook_allowed_url_prefixes: list[str] = []

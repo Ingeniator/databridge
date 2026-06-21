@@ -8,12 +8,13 @@ from databridge.config import DatasinkConfig
 class BaseSink(ABC):
     def __init__(self, config: DatasinkConfig) -> None:
         self._config = config
+        self.external_id: str | None = None
 
     @abstractmethod
     async def ping(self) -> None: ...
 
     @abstractmethod
-    async def list_datasets(self) -> list[str]: ...
+    async def list_datasets(self) -> list[dict[str, str]]: ...
 
     @abstractmethod
     async def create_dataset(self, name: str) -> None: ...

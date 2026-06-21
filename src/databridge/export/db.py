@@ -74,6 +74,8 @@ def _row_to_response(row: asyncpg.Record) -> ExportJobResponse:
         webhook_url=row.get("webhook_url"),
         webhook_enabled=row.get("webhook_enabled", False),
         webhook_payload_template=row.get("webhook_payload_template"),
+        external_dataset_id=row.get("external_dataset_id"),
+        external_asset_dataset_id=row.get("external_asset_dataset_id"),
     )
 
 
@@ -222,6 +224,20 @@ async def update_records_total(pool: asyncpg.Pool, job_id: UUID, records_total: 
     await pool.execute(
         "UPDATE export_jobs SET records_total=$1 WHERE id=$2",
         records_total, job_id,
+    )
+
+
+async def update_external_dataset_id(pool: asyncpg.Pool, job_id: UUID, external_dataset_id: str) -> None:
+    await pool.execute(
+        "UPDATE export_jobs SET external_dataset_id=$1 WHERE id=$2",
+        external_dataset_id, job_id,
+    )
+
+
+async def update_external_asset_dataset_id(pool: asyncpg.Pool, job_id: UUID, external_asset_dataset_id: str) -> None:
+    await pool.execute(
+        "UPDATE export_jobs SET external_asset_dataset_id=$1 WHERE id=$2",
+        external_asset_dataset_id, job_id,
     )
 
 

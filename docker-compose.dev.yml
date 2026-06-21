@@ -80,7 +80,42 @@ services:
         echo 'S3 seed complete'
       "
 
+  dataset-mock:
+    build:
+      context: ../dataset-mock
+    ports:
+      - "9101:9100"
+    volumes:
+      - dataset-mock-uploads:/tmp/mock-dataset-service
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:9100/health')"]
+      interval: 5s
+      timeout: 3s
+      retries: 6
+    mem_limit: 128m
+    cpus: 0.25
+
+  annotator-mock:
+    build:
+      context: ../annotator-mock
+    ports:
+      - "8011:8010"
+    environment:
+      PORT: "8010"
+      ANNOTATION_SPEED: "2"
+      LABEL_W_AGREE: "70"
+      LABEL_W_DISAGREE: "20"
+      LABEL_W_PARTIAL: "10"
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8010/health')"]
+      interval: 5s
+      timeout: 3s
+      retries: 6
+    mem_limit: 128m
+    cpus: 0.25
+
 volumes:
   postgres_data:
   clickhouse_data:
   minio_data:
+  dataset-mock-uploads:

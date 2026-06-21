@@ -29,6 +29,7 @@
 }`;
 
   let _webhookConfig = { url: '', enabled: false, payloadTemplate: _DEFAULT_WEBHOOK_TEMPLATE };
+  let _webhookAllowedPrefixes = [];
   let _assetResolution = false;
   let _assetUrlFields = [];
   let _assetUrlPrefix = '';
@@ -159,6 +160,11 @@
     clearPreviewTable();
     updateHealthBadge('SYNCING…', 'syncing');
     updateLastSynced('Detecting schema…');
+
+    ['masking-toggle', 'sampling-toggle', 'asset-resolution-toggle', 'webhook-toggle'].forEach(id => {
+      const el = document.getElementById(id);
+      if (el) el.disabled = false;
+    });
 
     // Auto-detect schema (load credentials in parallel for user connections)
     try {
@@ -899,8 +905,51 @@
     }
   }
 
-  async function onDatasinkChange(_name) {
-    // no-op; asset datasink defaults to main datasink
+  async function onDatasinkChange(name) {
+    const localSinkTypes = new Set(['local-zip', 'local-jsonl']);
+    const sink = (_datasinks || []).find(s => s.name === name);
+    const isLocal = !sink || localSinkTypes.has(sink.type);
+
+    const textInput = document.getElementById('destination-dataset-input');
+    const selectWrap = document.getElementById('destination-dataset-select-wrap');
+    const sel = document.getElementById('destination-dataset-select');
+
+    if (isLocal) {
+      textInput.classList.remove('hidden');
+      selectWrap.classList.add('hidden');
+      return;
+    }
+
+    textInput.classList.add('hidden');
+    selectWrap.classList.remove('hidden');
+    sel.innerHTML = '<option value="">Loading…</option>';
+    document.getElementById('destination-dataset-new-input').classList.add('hidden');
+    try {
+      const data = await api('GET', `/api/v1/datasinks/${encodeURIComponent(name)}/datasets`);
+      const datasets = data.datasets || [];
+      sel.innerHTML = '<option value="">Select dataset…</option>' +
+        datasets.map(d => {
+          const label = d.uid !== d.name
+            ? `${esc(d.name)} · ${esc(d.uid.slice(0, 8))}`
+            : esc(d.name);
+          return `<option value="${esc(d.uid)}">${label}</option>`;
+        }).join('') +
+        '<option value="__new__">＋ Create new…</option>';
+    } catch (e) {
+      sel.innerHTML = '<option value="">Failed to load datasets</option>' +
+        '<option value="__new__">＋ Create new…</option>';
+    }
+  }
+
+  function onDestinationDatasetSelectChange(value) {
+    const newInput = document.getElementById('destination-dataset-new-input');
+    if (value === '__new__') {
+      newInput.classList.remove('hidden');
+      newInput.focus();
+    } else {
+      newInput.classList.add('hidden');
+      newInput.value = '';
+    }
   }
 
   function onDatasetNameChange(value) {
@@ -966,8 +1015,21 @@
     if (!_activeId) { showError('Select a connection first.'); return; }
     const datasinkName = document.getElementById('datasink-select')?.value;
     if (!datasinkName) { showError('Select a datasink.'); return; }
-    const dest = document.getElementById('destination-dataset-input')?.value;
-    if (!dest) { showError('Enter a destination dataset name.'); return; }
+    const selectWrap = document.getElementById('destination-dataset-select-wrap');
+    const useSelect = selectWrap && !selectWrap.classList.contains('hidden');
+    let dest;
+    if (useSelect) {
+      const selVal = document.getElementById('destination-dataset-select')?.value;
+      if (selVal === '__new__') {
+        dest = document.getElementById('destination-dataset-new-input')?.value?.trim();
+        if (!dest) { showError('Enter a name for the new dataset.'); return; }
+      } else {
+        dest = selVal;
+      }
+    } else {
+      dest = document.getElementById('destination-dataset-input')?.value;
+    }
+    if (!dest) { showError(useSelect ? 'Select a destination dataset.' : 'Enter a destination dataset name.'); return; }
 
     // Collect asset URL fields if asset resolution enabled
     let assetUrlFields = _assetUrlFields;
@@ -1013,13 +1075,48 @@
   }
 
   // ── Webhook ────────────────────────────────────────────────────────────────
-  function onWebhookToggle(checked) { _webhookConfig.enabled = checked; }
-  function onWebhookUrlChange(value) { _webhookConfig.url = value; }
+  function _renderWebhookAllowedPrefixes() {
+    const el = document.getElementById('webhook-allowed-prefixes');
+    if (!el) return;
+    if (!_webhookAllowedPrefixes.length) { el.classList.add('hidden'); return; }
+    const chips = _webhookAllowedPrefixes.map(p => {
+      let host;
+      try { host = new URL(p).hostname; } catch { host = p; }
+      return `<span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg bg-primary/10 text-primary text-[11px] font-mono">${esc(host)}</span>`;
+    }).join('');
+    el.innerHTML = `<span class="material-symbols-outlined text-[14px] text-on-surface-variant/60">lock</span><span class="text-[11px] text-on-surface-variant/60">Allowed:</span>${chips}`;
+    el.classList.remove('hidden');
+  }
+
+  function _webhookUrlError(url) {
+    if (!_webhookAllowedPrefixes.length) return null;
+    if (!url) return null;
+    return _webhookAllowedPrefixes.some(p => url.startsWith(p)) ? null
+      : 'URL must start with one of the allowed hostnames shown above';
+  }
+
+  function onWebhookToggle(checked) {
+    _webhookConfig.enabled = checked;
+    document.getElementById('webhook-body').classList.toggle('hidden', !checked);
+    document.getElementById('webhook-hint').classList.toggle('hidden', checked);
+  }
+
+  function onWebhookUrlChange(value) {
+    _webhookConfig.url = value;
+    const errEl = document.getElementById('webhook-url-error');
+    if (!errEl) return;
+    const msg = _webhookUrlError(value);
+    errEl.textContent = msg || '';
+    errEl.classList.toggle('hidden', !msg);
+  }
+
   function onWebhookPayloadChange(value) { _webhookConfig.payloadTemplate = value; }
 
   async function testWebhook() {
     const url = document.getElementById('webhook-url-input')?.value;
     if (!url) { showError('Enter a webhook URL first.'); return; }
+    const err = _webhookUrlError(url);
+    if (err) { showError(err); return; }
     const template = _webhookConfig.payloadTemplate || null;
     try {
       await api('POST', '/api/v1/export-jobs/test-webhook', { url, template });
@@ -1355,6 +1452,8 @@
           .map(t => `<option value="${esc(t)}">${esc(t)}</option>`).join('');
         updateCredFields();
       }
+      _webhookAllowedPrefixes = cfg.webhook_allowed_url_prefixes || [];
+      _renderWebhookAllowedPrefixes();
     } catch (e) { /* ignore */ }
 
     const payloadEl = document.getElementById('webhook-payload-input');
@@ -1415,6 +1514,7 @@
     onAssetResolutionToggle,
     testAssetResolution,
     onDatasinkChange,
+    onDestinationDatasetSelectChange,
     onDatasetNameChange,
     startExport,
     onWebhookToggle,

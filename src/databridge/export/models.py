@@ -130,6 +130,8 @@ class ExportJobResponse(BaseModel):
     webhook_url: str | None = None
     webhook_enabled: bool = False
     webhook_payload_template: str | None = None
+    external_dataset_id: str | None = None
+    external_asset_dataset_id: str | None = None
     download_url: str = ""
     assets_download_url: str | None = None
 
@@ -150,8 +152,13 @@ class DatasinkListResponse(BaseModel):
     datasinks: list[DatasinkInfo]
 
 
+class DatasinkDataset(BaseModel):
+    name: str
+    uid: str
+
+
 class DatasinkDatasetListResponse(BaseModel):
-    datasets: list[str]
+    datasets: list[DatasinkDataset]
 
 
 class AssetFieldDetectRequest(BaseModel):

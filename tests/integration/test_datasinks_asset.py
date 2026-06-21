@@ -108,3 +108,26 @@ def test_detect_asset_fields_unknown_system_source_returns_404(client):
         headers={"X-Group-ID": "org1/user1"},
     )
     assert resp.status_code == 404
+
+
+_VALID_UUID = "00000000-0000-0000-0000-000000000001"
+
+
+def test_detect_asset_fields_both_sources_returns_400(client):
+    """POST with both connection_id and system_source_name → 400."""
+    resp = client.post(
+        f"/api/v1/datasinks/{MOCK_SINK_NAME}/detect-asset-fields",
+        json={"connection_id": _VALID_UUID, "system_source_name": SRC_NAME},
+        headers={"X-Group-ID": "org1/user1"},
+    )
+    assert resp.status_code == 400
+
+
+def test_detect_asset_fields_connection_id_returns_501(client):
+    """POST with connection_id (no system_source_name) → 501."""
+    resp = client.post(
+        f"/api/v1/datasinks/{MOCK_SINK_NAME}/detect-asset-fields",
+        json={"connection_id": _VALID_UUID},
+        headers={"X-Group-ID": "org1/user1"},
+    )
+    assert resp.status_code == 501

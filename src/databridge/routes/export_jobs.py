@@ -32,6 +32,8 @@ logger = structlog.get_logger(__name__)
 router = APIRouter(tags=["export-jobs"])
 
 _LOCAL_SINK_TYPES = {"local-zip", "local-jsonl"}
+_DATASET_MOCK_TYPE = "dataset-mock"
+_ANNOTATOR_MOCK_TYPE = "annotator-mock"
 
 
 def _with_download_urls(job: ExportJobResponse) -> ExportJobResponse:
@@ -48,6 +50,22 @@ def _with_download_urls(job: ExportJobResponse) -> ExportJobResponse:
             if asset_cfg and asset_cfg.type in _LOCAL_SINK_TYPES:
                 assets_path = f"/api/v1/export-jobs/{job.id}/download?assets=true"
                 updates["assets_download_url"] = f"{base}{assets_path}" if base else assets_path
+    elif datasink_cfg and datasink_cfg.type == _DATASET_MOCK_TYPE:
+        sink_base = datasink_cfg.url.rstrip("/")
+        if job.external_dataset_id:
+            updates["download_url"] = f"{sink_base}/_mock/datasets/{job.external_dataset_id}"
+        else:
+            updates["download_url"] = f"{sink_base}/_mock/datasets"
+        if job.asset_resolution and job.external_asset_dataset_id:
+            asset_cfg = next((s for s in settings.datasinks if s.name == job.asset_datasink_name), None)
+            asset_base = asset_cfg.url.rstrip("/") if asset_cfg else sink_base
+            updates["assets_download_url"] = f"{asset_base}/_mock/datasets/{job.external_asset_dataset_id}"
+    elif datasink_cfg and datasink_cfg.type == _ANNOTATOR_MOCK_TYPE:
+        sink_base = datasink_cfg.url.rstrip("/")
+        if job.external_dataset_id:
+            updates["download_url"] = f"{sink_base}/api/v0/statistics/task/{job.external_dataset_id}"
+        else:
+            updates["download_url"] = f"{sink_base}/api/v0/tasks"
     elif datasink_cfg:
         updates["download_url"] = datasink_cfg.url or ""
 
@@ -78,16 +96,21 @@ async def create_export_job(
             ),
         )
 
+    arq_pool = _get_arq_pool()
+    if arq_pool is None:
+        raise HTTPException(status_code=503, detail="export worker queue unavailable")
+    try:
+        await arq_pool.ping()
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=f"export worker queue unreachable: {exc}") from exc
+
     job = await insert_export_job(pool, body, org_id=auth.org_id, user_id=auth.user_id)
 
-    # Enqueue ARQ job
     try:
-        from fastapi import Request
-        arq_pool = _get_arq_pool()
-        if arq_pool is not None:
-            await arq_pool.enqueue_job("run_export_job", str(job.id), _job_id=str(job.id))
+        await arq_pool.enqueue_job("run_export_job", str(job.id), _job_id=str(job.id))
     except Exception as exc:
-        logger.warning("arq_enqueue_failed", job_id=str(job.id), error=str(exc))
+        logger.error("arq_enqueue_failed", job_id=str(job.id), error=str(exc))
+        raise HTTPException(status_code=503, detail=f"failed to enqueue job: {exc}") from exc
 
     EXPORT_JOBS_CREATED.labels(org_id=auth.org_id, sink_type=datasink_cfg.type).inc()
     return _with_download_urls(job)
@@ -157,6 +180,7 @@ async def retry_export_job(
         datasource_filter=original.datasource_filter,
         datasink_name=original.datasink_name,
         destination_dataset=original.destination_dataset,
+        asset_dataset=original.asset_dataset,
         asset_resolution=original.asset_resolution,
         asset_url_fields=original.asset_url_fields,
         asset_url_prefix=original.asset_url_prefix,
@@ -167,14 +191,21 @@ async def retry_export_job(
         webhook_enabled=original.webhook_enabled,
         webhook_payload_template=original.webhook_payload_template,
     )
+    arq_pool = _get_arq_pool()
+    if arq_pool is None:
+        raise HTTPException(status_code=503, detail="export worker queue unavailable")
+    try:
+        await arq_pool.ping()
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=f"export worker queue unreachable: {exc}") from exc
+
     new_job = await insert_export_job(pool, new_job_data, org_id=auth.org_id, user_id=auth.user_id)
 
     try:
-        arq_pool = _get_arq_pool()
-        if arq_pool is not None:
-            await arq_pool.enqueue_job("run_export_job", str(new_job.id), _job_id=str(new_job.id))
+        await arq_pool.enqueue_job("run_export_job", str(new_job.id), _job_id=str(new_job.id))
     except Exception as exc:
-        logger.warning("arq_enqueue_failed", job_id=str(new_job.id), error=str(exc))
+        logger.error("arq_enqueue_failed", job_id=str(new_job.id), error=str(exc))
+        raise HTTPException(status_code=503, detail=f"failed to enqueue job: {exc}") from exc
 
     datasink_cfg = next((s for s in settings.datasinks if s.name == new_job.datasink_name), None)
     EXPORT_JOBS_CREATED.labels(
@@ -253,6 +284,18 @@ class _WebhookTestRequest(BaseModel):
     template: str | None = None
 
 
+def _validate_webhook_url(url: str, allowed_prefixes: tuple[str, ...]) -> None:
+    from urllib.parse import urlparse
+    parsed = urlparse(url)
+    if parsed.scheme not in ("http", "https"):
+        raise HTTPException(status_code=400, detail="webhook URL must use http or https scheme")
+    if allowed_prefixes and not any(url.startswith(p) for p in allowed_prefixes):
+        raise HTTPException(
+            status_code=400,
+            detail="webhook URL is not in the allowed prefixes configured by your administrator",
+        )
+
+
 @router.post("/api/v1/export-jobs/test-webhook", status_code=204)
 async def test_webhook_endpoint(
     body: _WebhookTestRequest,
@@ -260,6 +303,9 @@ async def test_webhook_endpoint(
 ) -> None:
     import httpx
     from databridge.export.webhook import render_payload
+
+    settings = get_settings()
+    _validate_webhook_url(body.url, settings.export.webhook_allowed_url_prefixes)
 
     _ctx = {
         "job_id": "job_id", "status": "status", "org_id": "org_id",
