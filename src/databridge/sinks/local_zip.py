@@ -32,8 +32,7 @@ class LocalZipSink(BaseSink):
             return hashlib.sha256(blob).hexdigest()[:16] + ".json"
 
     async def ping(self) -> None:
-        if not self._path.exists():
-            raise OSError(f"Path does not exist: {self._path}")
+        self._path.mkdir(parents=True, exist_ok=True)
         test_file = self._path / ".write_test"
         try:
             test_file.touch()

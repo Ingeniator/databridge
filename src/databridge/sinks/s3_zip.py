@@ -7,6 +7,7 @@ from io import BytesIO
 from string import Formatter
 
 import aioboto3
+from botocore.config import Config
 from botocore.exceptions import ClientError
 
 from databridge.config import DatasinkConfig
@@ -37,6 +38,7 @@ class S3ZipSink(BaseSink):
         kwargs: dict = {}
         if self._endpoint:
             kwargs["endpoint_url"] = self._endpoint
+            kwargs["config"] = Config(s3={"addressing_style": "path"})
         return kwargs
 
     def _make_key(self, *parts: str) -> str:

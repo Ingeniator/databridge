@@ -6,7 +6,7 @@ from uuid import UUID
 import asyncpg
 import structlog
 from fastapi import APIRouter, Depends, HTTPException, Query
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
 
 from databridge.auth import AuthContext, get_auth
@@ -32,6 +32,7 @@ logger = structlog.get_logger(__name__)
 router = APIRouter(tags=["export-jobs"])
 
 _LOCAL_SINK_TYPES = {"local-zip", "local-jsonl"}
+_S3_SINK_TYPES = {"s3-jsonl", "s3-zip"}
 _DATASET_MOCK_TYPE = "dataset-mock"
 _ANNOTATOR_MOCK_TYPE = "annotator-mock"
 
@@ -66,6 +67,9 @@ def _with_download_urls(job: ExportJobResponse) -> ExportJobResponse:
             updates["download_url"] = f"{sink_base}/api/v0/statistics/task/{job.external_dataset_id}"
         else:
             updates["download_url"] = f"{sink_base}/api/v0/tasks"
+    elif datasink_cfg and datasink_cfg.type in _S3_SINK_TYPES:
+        path = f"/api/v1/export-jobs/{job.id}/download"
+        updates["download_url"] = f"{base}{path}" if base else path
     elif datasink_cfg:
         updates["download_url"] = datasink_cfg.url or ""
 
@@ -234,6 +238,36 @@ async def cancel_export_job_endpoint(
 _EXTENSIONS = {"local-zip": ".zip", "local-jsonl": ".jsonl"}
 _MEDIA_TYPES = {"local-zip": "application/zip", "local-jsonl": "application/x-ndjson"}
 
+_S3_EXTENSIONS = {"s3-jsonl": ".jsonl", "s3-zip": ".zip"}
+_S3_MEDIA_TYPES = {"s3-jsonl": "application/x-ndjson", "s3-zip": "application/zip"}
+
+
+def _s3_object_key(datasink_cfg, dataset: str, job_id: UUID) -> str:
+    prefix = datasink_cfg.key_prefix.rstrip("/") if datasink_cfg.key_prefix else ""
+    ext = _S3_EXTENSIONS[datasink_cfg.type]
+    name = f"{dataset}_{job_id}{ext}"
+    return f"{prefix}/{name}" if prefix else name
+
+
+async def _s3_stream(datasink_cfg, key: str):
+    import aioboto3
+    from botocore.config import Config
+
+    client_kwargs: dict = {}
+    if datasink_cfg.endpoint:
+        client_kwargs["endpoint_url"] = datasink_cfg.endpoint
+        client_kwargs["config"] = Config(s3={"addressing_style": "path"})
+
+    session = aioboto3.Session(
+        aws_access_key_id=datasink_cfg.access_key_id or None,
+        aws_secret_access_key=datasink_cfg.secret_access_key or None,
+        region_name=datasink_cfg.region or "us-east-1",
+    )
+    async with session.client("s3", **client_kwargs) as s3:
+        resp = await s3.get_object(Bucket=datasink_cfg.bucket, Key=key)
+        async for chunk in resp["Body"].iter_chunks():
+            yield chunk
+
 
 def _local_file_response(datasink_cfg, dataset: str, job_id: UUID) -> FileResponse:
     ext = _EXTENSIONS[datasink_cfg.type]
@@ -274,9 +308,23 @@ async def download_export(
         return _local_file_response(asset_cfg, job.asset_dataset, job_id)
 
     datasink_cfg = next((s for s in settings.datasinks if s.name == job.datasink_name), None)
-    if datasink_cfg is None or datasink_cfg.type not in _LOCAL_SINK_TYPES:
-        raise HTTPException(status_code=400, detail="download only available for local-zip and local-jsonl sinks")
-    return _local_file_response(datasink_cfg, job.destination_dataset, job_id)
+    if datasink_cfg is None:
+        raise HTTPException(status_code=400, detail=f"datasink '{job.datasink_name}' not found in config")
+
+    if datasink_cfg.type in _LOCAL_SINK_TYPES:
+        return _local_file_response(datasink_cfg, job.destination_dataset, job_id)
+
+    if datasink_cfg.type in _S3_SINK_TYPES:
+        key = _s3_object_key(datasink_cfg, job.destination_dataset, job_id)
+        ext = _S3_EXTENSIONS[datasink_cfg.type]
+        filename = f"{job.destination_dataset}_{job_id}{ext}"
+        return StreamingResponse(
+            _s3_stream(datasink_cfg, key),
+            media_type=_S3_MEDIA_TYPES[datasink_cfg.type],
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        )
+
+    raise HTTPException(status_code=400, detail="download not available for this sink type")
 
 
 class _WebhookTestRequest(BaseModel):
