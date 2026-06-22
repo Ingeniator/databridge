@@ -319,12 +319,37 @@ class ClickHouseConnectionAdapter(BaseAdapter):
 class TrinoConnectionAdapter(BaseAdapter):
     _health_path = "/v1/info"
 
+    async def _execute(self, sql: str, user: str, row_limit: int | None = None) -> list[list]:
+        """Execute a Trino SQL statement, following nextUri until the query finishes."""
+        headers = {"X-Trino-User": user, "Content-Type": "text/plain"}
+        rows: list[list] = []
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            r = await client.post(f"{self._url}/v1/statement", content=sql, headers=headers)
+            r.raise_for_status()
+            data = r.json()
+            rows.extend(data.get("data") or [])
+            next_uri = data.get("nextUri")
+            while next_uri:
+                if row_limit is not None and len(rows) >= row_limit:
+                    await client.delete(next_uri)
+                    break
+                r = await client.get(next_uri, headers=headers)
+                r.raise_for_status()
+                data = r.json()
+                rows.extend(data.get("data") or [])
+                state = data.get("stats", {}).get("state", "")
+                next_uri = data.get("nextUri")
+                if state in ("FINISHED", "FAILED") and not next_uri:
+                    break
+        return rows
+
     async def preview(self, query: str, start: datetime | None, end: datetime | None, limit: int) -> list[dict]:
         creds = self._creds_dict()
         user = creds.get("user", "trino")
         catalog = creds.get("catalog", "")
         schema_name = creds.get("schema_name", "")
-
+        table_name = creds.get("table", "events")
+        table = f"{catalog}.{schema_name}.{table_name}" if catalog and schema_name else table_name
         conditions: list[str] = []
         if query:
             q_esc = query.replace("'", "''")
@@ -333,35 +358,33 @@ class TrinoConnectionAdapter(BaseAdapter):
             conditions.append(f"timestamp >= TIMESTAMP '{start.strftime('%Y-%m-%d %H:%M:%S')}'")
         if end:
             conditions.append(f"timestamp < TIMESTAMP '{end.strftime('%Y-%m-%d %H:%M:%S')}'")
-
-        table = f"{catalog}.{schema_name}.events" if catalog and schema_name else "events"
         where = f" WHERE {' AND '.join(conditions)}" if conditions else ""
         sql = f"SELECT * FROM {table}{where} LIMIT {limit}"
 
         headers = {"X-Trino-User": user, "Content-Type": "text/plain"}
         results: list[dict] = []
+        columns: list[str] = []
 
-        async with httpx.AsyncClient(timeout=30.0) as client:
+        async with httpx.AsyncClient(timeout=60.0) as client:
             r = await client.post(f"{self._url}/v1/statement", content=sql, headers=headers)
             r.raise_for_status()
             data = r.json()
-
-            columns = [col["name"] for col in data.get("columns", [])]
-            for row in data.get("data", []):
+            columns = [col["name"] for col in data.get("columns") or []]
+            for row in data.get("data") or []:
                 results.append(dict(zip(columns, row)))
-
             next_uri = data.get("nextUri")
             while next_uri and len(results) < limit:
-                r = await client.get(next_uri)
+                r = await client.get(next_uri, headers=headers)
                 r.raise_for_status()
                 data = r.json()
                 if not columns:
-                    columns = [col["name"] for col in data.get("columns", [])]
-                for row in data.get("data", []):
+                    columns = [col["name"] for col in data.get("columns") or []]
+                for row in data.get("data") or []:
                     results.append(dict(zip(columns, row)))
-                if data.get("stats", {}).get("state") in ("FINISHED", "FAILED"):
-                    break
+                state = data.get("stats", {}).get("state", "")
                 next_uri = data.get("nextUri")
+                if state in ("FINISHED", "FAILED") and not next_uri:
+                    break
 
         return results[:limit]
 
@@ -370,6 +393,8 @@ class TrinoConnectionAdapter(BaseAdapter):
         user = creds.get("user", "trino")
         catalog = creds.get("catalog", "")
         schema_name = creds.get("schema_name", "")
+        table_name = creds.get("table", "events")
+        table = f"{catalog}.{schema_name}.{table_name}" if catalog and schema_name else table_name
         conditions: list[str] = []
         if query:
             q_esc = query.replace("'", "''")
@@ -378,16 +403,11 @@ class TrinoConnectionAdapter(BaseAdapter):
             conditions.append(f"timestamp >= TIMESTAMP '{start.strftime('%Y-%m-%d %H:%M:%S')}'")
         if end:
             conditions.append(f"timestamp < TIMESTAMP '{end.strftime('%Y-%m-%d %H:%M:%S')}'")
-        table = f"{catalog}.{schema_name}.events" if catalog and schema_name else "events"
         where = f" WHERE {' AND '.join(conditions)}" if conditions else ""
         sql = f"SELECT COUNT(*) FROM {table}{where}"
-        headers = {"X-Trino-User": user, "Content-Type": "text/plain"}
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            r = await client.post(f"{self._url}/v1/statement", content=sql, headers=headers)
-            r.raise_for_status()
-            data = r.json()
-            for row in data.get("data", []):
-                return int(row[0])
+        rows = await self._execute(sql, user)
+        if rows:
+            return int(rows[0][0])
         return 0
 
     async def fetch_page(
@@ -402,6 +422,8 @@ class TrinoConnectionAdapter(BaseAdapter):
         user = creds.get("user", "trino")
         catalog = creds.get("catalog", "")
         schema_name = creds.get("schema_name", "")
+        table_name = creds.get("table", "events")
+        table = f"{catalog}.{schema_name}.{table_name}" if catalog and schema_name else table_name
         conditions: list[str] = []
         if query:
             q_esc = query.replace("'", "''")
@@ -410,18 +432,34 @@ class TrinoConnectionAdapter(BaseAdapter):
             conditions.append(f"timestamp >= TIMESTAMP '{start.strftime('%Y-%m-%d %H:%M:%S')}'")
         if end:
             conditions.append(f"timestamp < TIMESTAMP '{end.strftime('%Y-%m-%d %H:%M:%S')}'")
-        table = f"{catalog}.{schema_name}.events" if catalog and schema_name else "events"
         where = f" WHERE {' AND '.join(conditions)}" if conditions else ""
         sql = f"SELECT * FROM {table}{where} LIMIT {limit} OFFSET {offset}"
+
         headers = {"X-Trino-User": user, "Content-Type": "text/plain"}
         results: list[dict] = []
-        async with httpx.AsyncClient(timeout=30.0) as client:
+        columns: list[str] = []
+
+        async with httpx.AsyncClient(timeout=60.0) as client:
             r = await client.post(f"{self._url}/v1/statement", content=sql, headers=headers)
             r.raise_for_status()
             data = r.json()
-            columns = [col["name"] for col in data.get("columns", [])]
-            for row in data.get("data", []):
+            columns = [col["name"] for col in data.get("columns") or []]
+            for row in data.get("data") or []:
                 results.append(dict(zip(columns, row)))
+            next_uri = data.get("nextUri")
+            while next_uri:
+                r = await client.get(next_uri, headers=headers)
+                r.raise_for_status()
+                data = r.json()
+                if not columns:
+                    columns = [col["name"] for col in data.get("columns") or []]
+                for row in data.get("data") or []:
+                    results.append(dict(zip(columns, row)))
+                state = data.get("stats", {}).get("state", "")
+                next_uri = data.get("nextUri")
+                if state in ("FINISHED", "FAILED") and not next_uri:
+                    break
+
         return results
 
     async def schema(self, start: datetime | None, end: datetime | None) -> tuple[dict[str, dict], int]:
@@ -436,11 +474,13 @@ class LangfuseConnectionAdapter(BaseAdapter):
             r = await client.get(f"{self._url}/api/public/health")
             r.raise_for_status()
 
+    def _langfuse_auth(self, creds: dict) -> tuple[str, str] | None:
+        public_key = creds.get("public_key", "") or creds.get("access_key_id", "")
+        secret_key = creds.get("secret_key", "") or creds.get("secret_access_key", "")
+        return (public_key, secret_key) if public_key else None
+
     async def preview(self, query: str, start: datetime | None, end: datetime | None, limit: int) -> list[dict]:
         creds = self._creds_dict()
-        public_key = creds.get("public_key", "")
-        secret_key = creds.get("secret_key", "")
-
         params: dict = {"limit": limit}
         if query:
             params["name"] = query
@@ -449,17 +489,14 @@ class LangfuseConnectionAdapter(BaseAdapter):
         if end:
             params["toTimestamp"] = end.isoformat()
 
-        auth = (public_key, secret_key) if public_key else None
         async with httpx.AsyncClient(timeout=30.0) as client:
-            r = await client.get(f"{self._url}/api/public/traces", params=params, auth=auth)
+            r = await client.get(f"{self._url}/api/public/traces", params=params, auth=self._langfuse_auth(creds))
             r.raise_for_status()
             data = r.json()
             return data.get("data", [])
 
     async def count(self, query: str, start: datetime | None, end: datetime | None) -> int:
         creds = self._creds_dict()
-        public_key = creds.get("public_key", "")
-        secret_key = creds.get("secret_key", "")
         params: dict = {"limit": 1}
         if query:
             params["name"] = query
@@ -467,9 +504,8 @@ class LangfuseConnectionAdapter(BaseAdapter):
             params["fromTimestamp"] = start.isoformat()
         if end:
             params["toTimestamp"] = end.isoformat()
-        auth = (public_key, secret_key) if public_key else None
         async with httpx.AsyncClient(timeout=30.0) as client:
-            r = await client.get(f"{self._url}/api/public/traces", params=params, auth=auth)
+            r = await client.get(f"{self._url}/api/public/traces", params=params, auth=self._langfuse_auth(creds))
             r.raise_for_status()
             data = r.json()
             return data.get("meta", {}).get("total", 0)
@@ -484,8 +520,6 @@ class LangfuseConnectionAdapter(BaseAdapter):
     ) -> list[dict]:
         page = (offset // limit) + 1 if limit else 1
         creds = self._creds_dict()
-        public_key = creds.get("public_key", "")
-        secret_key = creds.get("secret_key", "")
         params: dict = {"limit": limit, "page": page}
         if query:
             params["name"] = query
@@ -493,9 +527,8 @@ class LangfuseConnectionAdapter(BaseAdapter):
             params["fromTimestamp"] = start.isoformat()
         if end:
             params["toTimestamp"] = end.isoformat()
-        auth = (public_key, secret_key) if public_key else None
         async with httpx.AsyncClient(timeout=30.0) as client:
-            r = await client.get(f"{self._url}/api/public/traces", params=params, auth=auth)
+            r = await client.get(f"{self._url}/api/public/traces", params=params, auth=self._langfuse_auth(creds))
             r.raise_for_status()
             return r.json().get("data", [])
 
