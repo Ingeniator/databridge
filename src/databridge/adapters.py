@@ -542,38 +542,45 @@ class S3ConnectionAdapter(BaseAdapter):
 
         await asyncio.wait_for(_head(), timeout=_PING_TIMEOUT)
 
-    async def preview(self, query: str, start: datetime | None, end: datetime | None, limit: int) -> list[dict]:
-        creds = self._creds_dict()
-        bucket = creds.get("bucket", "") or getattr(self._conn, "bucket", "")
-        key_prefix = creds.get("key_prefix", "") or getattr(self._conn, "key_prefix", "")
+    def _duckdb_con(self, creds: dict):
+        import duckdb
+        con = duckdb.connect()
+        try:
+            con.execute("INSTALL httpfs; LOAD httpfs;")
+        except Exception:
+            pass
         access_key = creds.get("access_key_id", "")
         secret_key = creds.get("secret_access_key", "")
         region = creds.get("region", "us-east-1")
         endpoint = creds.get("endpoint", "") or getattr(self._conn, "endpoint", "")
+        addressing_style = creds.get("addressing_style", "virtual")
+        if access_key:
+            con.execute(f"SET s3_access_key_id='{access_key}';")
+            con.execute(f"SET s3_secret_access_key='{secret_key}';")
+        con.execute(f"SET s3_region='{region}';")
+        if endpoint:
+            host = endpoint.rstrip("/").split("://")[-1]
+            con.execute(f"SET s3_endpoint='{host}';")
+            con.execute("SET s3_use_ssl=false;")
+        if addressing_style == "path":
+            con.execute("SET s3_url_style='path';")
+        return con
+
+    async def preview(self, query: str, start: datetime | None, end: datetime | None, limit: int) -> list[dict]:
+        creds = self._creds_dict()
+        bucket = creds.get("bucket", "") or getattr(self._conn, "bucket", "")
+        key_prefix = creds.get("key_prefix", "") or getattr(self._conn, "key_prefix", "")
 
         def _scan() -> list[dict]:
-            import duckdb
-            con = duckdb.connect()
-            try:
-                con.execute("INSTALL httpfs; LOAD httpfs;")
-            except Exception:
-                pass
-            if access_key:
-                con.execute(f"SET s3_access_key_id='{access_key}';")
-                con.execute(f"SET s3_secret_access_key='{secret_key}';")
-            con.execute(f"SET s3_region='{region}';")
-            if endpoint:
-                host = endpoint.rstrip("/").split("://")[-1]
-                con.execute(f"SET s3_endpoint='{host}';")
-                con.execute("SET s3_use_ssl=false;")
-
+            con = self._duckdb_con(creds)
             prefix = key_prefix.rstrip("/") + "/" if key_prefix else ""
             for fmt, reader in (
                 ("parquet", "read_parquet"),
+                ("jsonl", "read_json_auto"),
                 ("json", "read_json_auto"),
                 ("csv", "read_csv_auto"),
             ):
-                path = f"s3://{bucket}/{prefix}*.{fmt}"
+                path = f"s3://{bucket}/{prefix}**/*.{fmt}"
                 try:
                     rows = con.execute(f"SELECT * FROM {reader}('{path}') LIMIT {limit}").fetchall()
                     cols = [d[0] for d in (con.description or [])]
@@ -588,29 +595,17 @@ class S3ConnectionAdapter(BaseAdapter):
         creds = self._creds_dict()
         bucket = creds.get("bucket", "") or getattr(self._conn, "bucket", "")
         key_prefix = creds.get("key_prefix", "") or getattr(self._conn, "key_prefix", "")
-        access_key = creds.get("access_key_id", "")
-        secret_key = creds.get("secret_access_key", "")
-        region = creds.get("region", "us-east-1")
-        endpoint = creds.get("endpoint", "") or getattr(self._conn, "endpoint", "")
 
         def _count() -> int:
-            import duckdb
-            con = duckdb.connect()
-            try:
-                con.execute("INSTALL httpfs; LOAD httpfs;")
-            except Exception:
-                pass
-            if access_key:
-                con.execute(f"SET s3_access_key_id='{access_key}';")
-                con.execute(f"SET s3_secret_access_key='{secret_key}';")
-            con.execute(f"SET s3_region='{region}';")
-            if endpoint:
-                host = endpoint.rstrip("/").split("://")[-1]
-                con.execute(f"SET s3_endpoint='{host}';")
-                con.execute("SET s3_use_ssl=false;")
+            con = self._duckdb_con(creds)
             prefix = key_prefix.rstrip("/") + "/" if key_prefix else ""
-            for fmt, reader in (("parquet", "read_parquet"), ("json", "read_json_auto"), ("csv", "read_csv_auto")):
-                path = f"s3://{bucket}/{prefix}*.{fmt}"
+            for fmt, reader in (
+                ("parquet", "read_parquet"),
+                ("jsonl", "read_json_auto"),
+                ("json", "read_json_auto"),
+                ("csv", "read_csv_auto"),
+            ):
+                path = f"s3://{bucket}/{prefix}**/*.{fmt}"
                 try:
                     row = con.execute(f"SELECT COUNT(*) FROM {reader}('{path}')").fetchone()
                     return int(row[0]) if row else 0
@@ -631,29 +626,17 @@ class S3ConnectionAdapter(BaseAdapter):
         creds = self._creds_dict()
         bucket = creds.get("bucket", "") or getattr(self._conn, "bucket", "")
         key_prefix = creds.get("key_prefix", "") or getattr(self._conn, "key_prefix", "")
-        access_key = creds.get("access_key_id", "")
-        secret_key = creds.get("secret_access_key", "")
-        region = creds.get("region", "us-east-1")
-        endpoint = creds.get("endpoint", "") or getattr(self._conn, "endpoint", "")
 
         def _scan() -> list[dict]:
-            import duckdb
-            con = duckdb.connect()
-            try:
-                con.execute("INSTALL httpfs; LOAD httpfs;")
-            except Exception:
-                pass
-            if access_key:
-                con.execute(f"SET s3_access_key_id='{access_key}';")
-                con.execute(f"SET s3_secret_access_key='{secret_key}';")
-            con.execute(f"SET s3_region='{region}';")
-            if endpoint:
-                host = endpoint.rstrip("/").split("://")[-1]
-                con.execute(f"SET s3_endpoint='{host}';")
-                con.execute("SET s3_use_ssl=false;")
+            con = self._duckdb_con(creds)
             prefix = key_prefix.rstrip("/") + "/" if key_prefix else ""
-            for fmt, reader in (("parquet", "read_parquet"), ("json", "read_json_auto"), ("csv", "read_csv_auto")):
-                path = f"s3://{bucket}/{prefix}*.{fmt}"
+            for fmt, reader in (
+                ("parquet", "read_parquet"),
+                ("jsonl", "read_json_auto"),
+                ("json", "read_json_auto"),
+                ("csv", "read_csv_auto"),
+            ):
+                path = f"s3://{bucket}/{prefix}**/*.{fmt}"
                 try:
                     rows = con.execute(
                         f"SELECT * FROM {reader}('{path}') LIMIT {limit} OFFSET {offset}"

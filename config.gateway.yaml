@@ -14,7 +14,7 @@ database_url: "postgresql://databridge:databridge@databridge-db:5432/databridge"
 encryption_key: "Ks_7gv0quQuNMvwLHNhToPPgrQw7Z3Zjm2r-4mTJqF4="
 
 export:
-  redis_url: "redis://langfuse-redis:6379/1"
+  redis_url: "redis://langfuse-redis:6379/2"
   worker_metrics_port: 9101
   webhook_allowed_url_prefixes:
     - "https://hooks.slack.com/"
@@ -71,3 +71,21 @@ datasinks:
   - name: "annotator-mock"
     type: annotator-mock
     url: "http://annotator-mock:8010"
+
+  - name: "s3-jsonl"
+    type: s3-jsonl
+    bucket: "databridge-exports"
+    region: "us-east-1"
+    access_key_id: "minioadmin"
+    secret_access_key: "minioadmin"
+    endpoint: "http://minio:9000"
+    key_prefix: "exports"
+
+  - name: "s3-zip"
+    type: s3-zip
+    bucket: "databridge-exports"
+    region: "us-east-1"
+    access_key_id: "minioadmin"
+    secret_access_key: "minioadmin"
+    endpoint: "http://minio:9000"
+    key_prefix: "exports"

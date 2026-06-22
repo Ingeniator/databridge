@@ -62,10 +62,14 @@ class SystemSourceConfig:
         return uuid5(NAMESPACE_DNS, self.name)
 
 
-_DATASINK_VALID_KEYS = {"name", "type", "url", "path", "filename_template"}
+_DATASINK_VALID_KEYS = {
+    "name", "type", "url", "path", "filename_template",
+    "bucket", "region", "access_key_id", "secret_access_key", "endpoint", "key_prefix",
+}
 _DATASINK_SERVICE_TYPES = {"dataset-mock", "annotator-mock"}
 _DATASINK_LOCAL_TYPES = {"local-zip", "local-jsonl"}
-_DATASINK_ALL_TYPES = _DATASINK_SERVICE_TYPES | _DATASINK_LOCAL_TYPES
+_DATASINK_S3_TYPES = {"s3-jsonl", "s3-zip"}
+_DATASINK_ALL_TYPES = _DATASINK_SERVICE_TYPES | _DATASINK_LOCAL_TYPES | _DATASINK_S3_TYPES
 
 
 @dataclass(frozen=True)
@@ -75,6 +79,12 @@ class DatasinkConfig:
     url: str = ""
     path: str = ""
     filename_template: str = ""
+    bucket: str = ""
+    region: str = "us-east-1"
+    access_key_id: str = ""
+    secret_access_key: str = ""
+    endpoint: str = ""
+    key_prefix: str = ""
 
 
 @dataclass(frozen=True)
@@ -231,6 +241,8 @@ def get_settings() -> Settings:
             raise ValueError(f"datasink '{sk_name}': 'url' is required for type {sk_type!r}")
         if sk_type in _DATASINK_LOCAL_TYPES and not sk.get("path"):
             raise ValueError(f"datasink '{sk_name}': 'path' is required for type {sk_type!r}")
+        if sk_type in _DATASINK_S3_TYPES and not sk.get("bucket"):
+            raise ValueError(f"datasink '{sk_name}': 'bucket' is required for type {sk_type!r}")
         sinks.append(DatasinkConfig(**sk))
 
     # export settings
