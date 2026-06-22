@@ -47,13 +47,14 @@ datasources:
     url: "http://trino:8080"
     catalog: "clickhouse"
     schema_name: "default"
+    table: "llogr_events"
     user: "databridge"
 
   - name: "Langfuse"
     type: langfuse
     url: "http://langfuse-web:3000"
-    public_key: "lf-pk-ai-suite"
-    secret_key: "lf-sk-ai-suite"
+    access_key_id: "lf-pk-ai-suite"
+    secret_access_key: "lf-sk-ai-suite"
 
 datasinks:
   - name: "local-zip"

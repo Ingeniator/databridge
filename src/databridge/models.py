@@ -30,6 +30,7 @@ class TrinoCredentials(BaseModel):
     password: str = ""
     catalog: str
     schema_name: str
+    table: str = "events"
 
 
 class LangfuseCredentials(BaseModel):
