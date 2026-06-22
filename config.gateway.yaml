@@ -52,8 +52,8 @@ datasources:
   - name: "Langfuse"
     type: langfuse
     url: "http://langfuse-web:3000"
-    access_key_id: "lf-pk-ai-suite"
-    secret_access_key: "lf-sk-ai-suite"
+    public_key: "lf-pk-ai-suite"
+    secret_key: "lf-sk-ai-suite"
 
 datasinks:
   - name: "local-zip"
