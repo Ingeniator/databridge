@@ -14,7 +14,7 @@ database_url: "postgresql://databridge:databridge@databridge-db:5432/databridge"
 encryption_key: "Ks_7gv0quQuNMvwLHNhToPPgrQw7Z3Zjm2r-4mTJqF4="
 
 export:
-  redis_url: "redis://langfuse-redis:6379/2"
+  redis_url: "redis://langfuse-redis:6379/1"
   worker_metrics_port: 9101
   webhook_allowed_url_prefixes:
     - "https://hooks.slack.com/"

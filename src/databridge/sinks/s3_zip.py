@@ -7,6 +7,7 @@ from io import BytesIO
 from string import Formatter
 
 import aioboto3
+from botocore.exceptions import ClientError
 
 from databridge.config import DatasinkConfig
 from databridge.sinks.base import BaseSink
@@ -58,6 +59,15 @@ class S3ZipSink(BaseSink):
         async with self._session().client("s3", **self._client_kwargs()) as s3:
             try:
                 await s3.head_bucket(Bucket=self._bucket)
+            except ClientError as exc:
+                code = exc.response.get("Error", {}).get("Code", "")
+                if code in ("404", "NoSuchBucket"):
+                    kwargs: dict = {}
+                    if self._region != "us-east-1":
+                        kwargs["CreateBucketConfiguration"] = {"LocationConstraint": self._region}
+                    await s3.create_bucket(Bucket=self._bucket, **kwargs)
+                else:
+                    raise OSError(f"S3 bucket not accessible: {self._bucket}") from exc
             except Exception as exc:
                 raise OSError(f"S3 bucket not accessible: {self._bucket}") from exc
 

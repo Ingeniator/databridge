@@ -113,7 +113,7 @@ Concrete adapters:
 | `ClickHouseAdapter` | `clickhouse` | HTTP JSON API |
 | `TrinoAdapter` | `trino` | Trino REST API |
 | `LangfuseAdapter` | `langfuse` | Langfuse HTTP API |
-| `S3DuckDBAdapter` | `s3` | DuckDB with httpfs extension (reads Parquet/JSON from S3) |
+| `S3ConnectionAdapter` | `s3` | DuckDB with httpfs extension (reads Parquet/JSONL/JSON/CSV from S3-compatible storage) |
 | `DatasetAdapter` | `dataset` | HTTP API (mock dataset service) |
 
 All adapters implement:
@@ -124,6 +124,21 @@ All adapters implement:
 - `fetch_page(query, start, end, limit, offset)` — paginated row fetch
 
 `get_adapter(conn_or_config, creds)` selects the right adapter class from a registry keyed on `type`.
+
+### S3 adapter — supported file formats
+
+The S3 adapter uses DuckDB's `httpfs` extension to scan the bucket. It tries formats in priority order, stopping at the first one that returns rows:
+
+| Priority | Extension | DuckDB reader |
+|---|---|---|
+| 1 | `.parquet` | `read_parquet` |
+| 2 | `.jsonl` | `read_json_auto` |
+| 3 | `.json` | `read_json_auto` |
+| 4 | `.csv` | `read_csv_auto` |
+
+Files are scanned with a recursive glob (`**/*.ext`) so subdirectories are included. If a bucket contains multiple formats, only the highest-priority match is used — mixed-format buckets are not merged.
+
+**MinIO / path-style addressing**: when `addressing_style: path` is set in the datasource config, the adapter sets `s3_url_style='path'` in DuckDB, which is required for local MinIO endpoints. AWS S3 uses the default virtual-hosted style.
 
 ---
 

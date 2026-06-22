@@ -515,12 +515,18 @@
     running:   'status-badge status-badge--running',
   };
 
+  function cellStr(val) {
+    if (val !== null && typeof val === 'object') return JSON.stringify(val);
+    return String(val ?? '');
+  }
+
   function statusCellHtml(key, val) {
-    const lower = String(val).toLowerCase();
+    const str = cellStr(val);
+    const lower = str.toLowerCase();
     if (/^status$|^state$/.test(key.toLowerCase()) && STATUS_BADGE_CLASS[lower]) {
-      return `<span class="${STATUS_BADGE_CLASS[lower]} font-label">${esc(val)}</span>`;
+      return `<span class="${STATUS_BADGE_CLASS[lower]} font-label">${esc(str)}</span>`;
     }
-    return esc(String(val));
+    return esc(str);
   }
 
   function renderPreviewTable(rows) {
@@ -545,7 +551,7 @@
     thead.innerHTML = `<tr>${cols.map(c => `<th class="py-1 px-2 font-medium text-left whitespace-nowrap">${esc(c)}</th>`).join('')}</tr>`;
     tbody.innerHTML = rows.map((row, n) => `
       <tr data-testid="preview-row-${n}" class="hover:bg-gray-50">
-        ${cols.map(c => `<td class="py-1 px-2 font-mono whitespace-nowrap max-w-xs truncate cursor-pointer hover:text-primary transition-colors" data-full="${esc(String(row[c] ?? ''))}" onclick="window.DB._showCellPopover(this)">${statusCellHtml(c, row[c] ?? '')}</td>`).join('')}
+        ${cols.map(c => `<td class="py-1 px-2 font-mono whitespace-nowrap max-w-xs truncate cursor-pointer hover:text-primary transition-colors" data-full="${esc(cellStr(row[c] ?? ''))}" onclick="window.DB._showCellPopover(this)">${statusCellHtml(c, row[c] ?? '')}</td>`).join('')}
       </tr>`).join('');
 
     loadMore.classList.toggle('hidden', rows.length < _previewLimit);
