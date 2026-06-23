@@ -48,6 +48,7 @@ datasources:
     catalog: "clickhouse"
     schema_name: "default"
     table: "llogr_events"
+    search_column: "body"
     user: "databridge"
 
   - name: "Langfuse"

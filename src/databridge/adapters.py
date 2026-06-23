@@ -353,7 +353,7 @@ class TrinoConnectionAdapter(BaseAdapter):
         conditions: list[str] = []
         if query:
             q_esc = query.replace("'", "''")
-            conditions.append(f"CAST(message AS VARCHAR) LIKE '%{q_esc}%'")
+            conditions.append(f"CAST({creds.get('search_column', 'message')} AS VARCHAR) LIKE '%{q_esc}%'")
         if start:
             conditions.append(f"timestamp >= TIMESTAMP '{start.strftime('%Y-%m-%d %H:%M:%S')}'")
         if end:
@@ -398,7 +398,7 @@ class TrinoConnectionAdapter(BaseAdapter):
         conditions: list[str] = []
         if query:
             q_esc = query.replace("'", "''")
-            conditions.append(f"CAST(message AS VARCHAR) LIKE '%{q_esc}%'")
+            conditions.append(f"CAST({creds.get('search_column', 'message')} AS VARCHAR) LIKE '%{q_esc}%'")
         if start:
             conditions.append(f"timestamp >= TIMESTAMP '{start.strftime('%Y-%m-%d %H:%M:%S')}'")
         if end:
@@ -427,7 +427,7 @@ class TrinoConnectionAdapter(BaseAdapter):
         conditions: list[str] = []
         if query:
             q_esc = query.replace("'", "''")
-            conditions.append(f"CAST(message AS VARCHAR) LIKE '%{q_esc}%'")
+            conditions.append(f"CAST({creds.get('search_column', 'message')} AS VARCHAR) LIKE '%{q_esc}%'")
         if start:
             conditions.append(f"timestamp >= TIMESTAMP '{start.strftime('%Y-%m-%d %H:%M:%S')}'")
         if end:

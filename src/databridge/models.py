@@ -31,6 +31,7 @@ class TrinoCredentials(BaseModel):
     catalog: str
     schema_name: str
     table: str = "events"
+    search_column: str = "message"
 
 
 class LangfuseCredentials(BaseModel):
