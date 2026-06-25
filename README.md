@@ -48,6 +48,34 @@ uv run uvicorn databridge.main:app --port 5010 --reload
 Browser UI: http://localhost:5010  
 API docs: http://localhost:5010/docs
 
+## Demo mode
+
+Demo mode runs the service without PostgreSQL or Redis. All data is stored in-memory and lost on restart. No authentication headers are required — every request is served as a super-admin.
+
+```bash
+DATABRIDGE_CONFIG=config.demo.yaml uv run uvicorn databridge.main:app --port 5010
+```
+
+The bundled `config.demo.yaml` starts with a single `local-zip` sink writing to `/tmp/databridge-demo`. To customise it, copy and edit:
+
+```bash
+cp config.demo.yaml config.local-demo.yaml
+# Edit datasources / datasinks as needed
+DATABRIDGE_CONFIG=config.local-demo.yaml uv run uvicorn databridge.main:app --port 5010
+```
+
+To enable demo mode in your own config file, set the top-level flag:
+
+```yaml
+demo: true
+```
+
+When `demo: true`:
+- No database connection is opened (`database_url` is ignored)
+- No Redis connection is attempted (`export.redis_url` is ignored)
+- Export jobs are accepted and queued in-memory but no worker processes them — jobs remain `pending`
+- All requests are authenticated as `demo/demo` (org `demo`, role `super_admin`) when no auth header is present
+
 ## Running tests
 
 ```bash

@@ -1,15 +1,59 @@
-/* databridge SPA — runtime element styles */
+/* databridge SPA — design tokens + component styles */
 
 :root {
-  --font-sans: 'Inter', system-ui, sans-serif;
+  --color-primary: #094cb2;
+  --color-primary-fixed: #d9e2ff;
+  --color-tertiary-container: #bfab49;
+  --color-on-surface-variant: #434653;
 }
 
-body {
-  font-family: var(--font-sans);
+/* ── Nav tabs ─────────────────────────────────────────────────────────────── */
+.nav-tab {
+  color: var(--color-on-surface-variant);
+  border-bottom: 2px solid transparent;
+  padding-bottom: 0.25rem;
+  font-size: 0.875rem;
+  background: transparent;
+  cursor: pointer;
+  transition: color 0.15s, border-color 0.15s;
 }
 
-.font-inter {
-  font-family: var(--font-sans);
+.nav-tab:hover { color: var(--color-primary); }
+
+.nav-tab--active {
+  color: var(--color-primary);
+  border-bottom-color: var(--color-primary);
+}
+
+/* ── Connection tab bar ───────────────────────────────────────────────────── */
+.conn-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  padding: 0.625rem 1.25rem;
+  border-radius: 0.5rem 0.5rem 0 0;
+  font-size: 0.8125rem;
+  font-family: 'Public Sans', system-ui, sans-serif;
+  font-weight: 500;
+  color: #434653;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background-color 0.15s, color 0.15s;
+  border-bottom: 2px solid transparent;
+}
+
+.conn-tab:hover {
+  background-color: #efedee;
+  color: var(--color-primary);
+}
+
+.conn-tab--active {
+  color: var(--color-primary);
+  font-weight: 700;
+  background-color: #ffffff;
+  border-bottom-color: var(--color-primary);
 }
 
 /* ── Icon buttons ─────────────────────────────────────────────────────────── */
@@ -23,132 +67,228 @@ body {
   border: none;
   background: transparent;
   cursor: pointer;
-  transition: background-color 0.15s;
+  transition: background-color 0.15s, color 0.15s;
 }
 
-.icon-btn .material-symbols-outlined {
-  font-size: 1.1rem;
+.icon-btn:hover { background-color: #efedee; }
+
+/* ── Field chips (schema) ─────────────────────────────────────────────────── */
+.field-chip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.25rem 0.5rem;
+  border-radius: 0.25rem;
+  background: #f5f3f4;
+  border: 1px solid rgba(195, 198, 213, 0.3);
+  transition: border-color 0.15s;
+  gap: 0.5rem;
 }
 
-/* ── Connection cards ─────────────────────────────────────────────────────── */
-[id^="conn-card-"],
-[id^="sys-card-"] {
-  transition: box-shadow 0.15s, transform 0.1s;
+.field-chip { cursor: pointer; }
+.field-chip:hover { border-color: rgba(9, 76, 178, 0.3); }
+.field-chip--ts { border-color: rgba(9, 76, 178, 0.6); background: rgba(9, 76, 178, 0.08); }
+.ts-score-dot { font-size: 0.6rem; color: rgba(9, 76, 178, 0.7); margin-left: 1px; }
+
+.field-chip .field-name {
+  font-size: 0.625rem;
+  font-family: monospace;
+  color: var(--color-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
-[id^="conn-card-"]:hover {
-  transform: translateY(-1px);
-}
-
-/* ── Type badges ──────────────────────────────────────────────────────────── */
-.type-badge {
-  display: inline-block;
-  padding: 0.1rem 0.5rem;
-  border-radius: 0.375rem;
-  font-size: 0.7rem;
-  font-weight: 600;
+.field-chip .field-type {
+  font-size: 0.5rem;
+  font-family: 'Public Sans', system-ui, sans-serif;
+  font-weight: 700;
+  color: rgba(67, 70, 83, 0.6);
   text-transform: uppercase;
   letter-spacing: 0.03em;
+  flex-shrink: 0;
+}
+
+/* ── Type badge pill (in connection tabs) ─────────────────────────────────── */
+.type-badge-pill {
+  display: inline-block;
+  padding: 0.1rem 0.4rem;
+  border-radius: 9999px;
+  font-size: 0.6rem;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  background: var(--color-primary-fixed);
+  color: var(--color-primary);
+  font-family: 'Public Sans', system-ui, sans-serif;
+}
+
+/* ── Health badge ─────────────────────────────────────────────────────────── */
+.health-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.health-badge--healthy {
+  background: #f0fdf4;
+  color: #15803d;
+  border: 1px solid #dcfce7;
+}
+
+.health-badge--healthy::before {
+  content: '';
+  display: inline-block;
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: 9999px;
+  background: #22c55e;
+  animation: dot-pulse 1.5s ease-in-out infinite;
+  flex-shrink: 0;
+}
+
+.health-badge--syncing {
+  background: #f3f4f6;
+  color: #6b7280;
+  border: 1px solid #e5e7eb;
+  animation: pulse-subtle 1.5s ease-in-out infinite;
+}
+
+.health-badge--error {
+  background: #fef2f2;
+  color: #b91c1c;
+  border: 1px solid #fecaca;
+}
+
+/* ── Status badges ────────────────────────────────────────────────────────── */
+.status-badge {
+  display: inline-block;
+  padding: 0.15rem 0.5rem;
+  border-radius: 0.25rem;
+  font-size: 0.6rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  font-family: 'Public Sans', system-ui, sans-serif;
+}
+
+.status-badge--processed {
+  background: var(--color-tertiary-container);
+  color: #1a1100;
+}
+
+.status-badge--completed {
+  background: #dcfce7;
+  color: #15803d;
+}
+
+.status-badge--error,
+.status-badge--failed {
+  background: #fee2e2;
+  color: #b91c1c;
+}
+
+.status-badge--pending {
+  background: #fef9c3;
+  color: #854d0e;
+}
+
+.status-badge--running {
+  background: #dbeafe;
+  color: #1e40af;
+}
+
+.status-badge--cancelled {
+  background: #f3f4f6;
+  color: #6b7280;
+}
+
+/* ── Export button ────────────────────────────────────────────────────────── */
+.export-btn {
+  background: linear-gradient(135deg, var(--color-primary), #3366cc);
+  color: #ffffff;
+  transition: opacity 0.15s, transform 0.1s, box-shadow 0.15s;
+  box-shadow: 0 4px 14px rgba(9, 76, 178, 0.25);
+}
+
+.export-btn:hover {
+  opacity: 0.93;
+  transform: scale(1.01);
+  box-shadow: 0 6px 20px rgba(9, 76, 178, 0.35);
+}
+
+.export-btn:active { transform: scale(0.97); }
+
+.export-btn:disabled {
+  background: #d1d5db;
+  box-shadow: none;
+  cursor: not-allowed;
 }
 
 /* ── Preview table ────────────────────────────────────────────────────────── */
-#preview-table {
-  border-collapse: collapse;
-  width: 100%;
+#preview-table th {
+  padding: 0.5rem 1rem;
+  font-weight: 700;
+  border-bottom: 1px solid rgba(195, 198, 213, 0.2);
 }
 
-#preview-table th,
 #preview-table td {
-  border: 1px solid #e5e7eb;
-  padding: 0.3rem 0.6rem;
+  padding: 0.5rem 1rem;
 }
 
-#preview-table thead {
-  background: #f9fafb;
-  font-size: 0.7rem;
-  text-transform: uppercase;
-  color: #6b7280;
-  letter-spacing: 0.04em;
+#preview-table tbody tr:hover { background: #f5f3f4; }
+
+/* ── Job rows ─────────────────────────────────────────────────────────────── */
+.job-row {
+  background: #ffffff;
+  border-radius: 1rem;
+  border: 1px solid rgba(195, 198, 213, 0.3);
+  box-shadow: 0 1px 3px rgba(0,0,0,0.04);
+  transition: box-shadow 0.15s;
 }
 
-#preview-table tbody tr:hover {
-  background: #f9fafb;
+.job-row:hover {
+  box-shadow: 0 3px 10px rgba(0,0,0,0.07);
 }
 
-/* ── Schema fields table ──────────────────────────────────────────────────── */
-#schema-fields table {
-  width: 100%;
-  border-collapse: collapse;
-}
+/* ── Modal ────────────────────────────────────────────────────────────────── */
+#conn-modal { animation: fadeIn 0.15s ease-out; }
 
-#schema-fields th,
-#schema-fields td {
-  padding: 0.25rem 0.5rem;
-  font-size: 0.72rem;
-}
+#conn-modal > div { animation: slideUp 0.2s ease-out; }
 
-#schema-fields th {
-  background: #f9fafb;
-  color: #6b7280;
-}
+/* ── Toasts ───────────────────────────────────────────────────────────────── */
+#error-toast,
+#success-toast { animation: slideIn 0.2s ease-out; }
 
-#schema-fields tr:hover {
-  background: #f9fafb;
-}
-
-/* ── Modal overlay ────────────────────────────────────────────────────────── */
-#conn-modal {
-  animation: fadeIn 0.15s ease-out;
-}
-
+/* ── Animations ───────────────────────────────────────────────────────────── */
 @keyframes fadeIn {
   from { opacity: 0; }
   to   { opacity: 1; }
 }
 
-#conn-modal > div {
-  animation: slideUp 0.2s ease-out;
-}
-
 @keyframes slideUp {
   from { transform: translateY(1rem); opacity: 0; }
-  to   { transform: translateY(0); opacity: 1; }
-}
-
-/* ── Toast ────────────────────────────────────────────────────────────────── */
-#error-toast,
-#success-toast {
-  animation: slideIn 0.2s ease-out;
+  to   { transform: translateY(0);    opacity: 1; }
 }
 
 @keyframes slideIn {
   from { transform: translateX(1rem); opacity: 0; }
-  to   { transform: translateX(0); opacity: 1; }
+  to   { transform: translateX(0);    opacity: 1; }
 }
 
-/* ── Empty state ──────────────────────────────────────────────────────────── */
-#empty-state {
-  border: 2px dashed #e5e7eb;
-  border-radius: 0.75rem;
+@keyframes dot-pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50%       { opacity: 0.4; transform: scale(0.75); }
 }
 
-/* ── Responsive tweaks ────────────────────────────────────────────────────── */
-@media (max-width: 640px) {
-  nav {
-    padding: 0.75rem 1rem;
-  }
+@keyframes pulse-subtle {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0.6; }
+}
 
-  main {
-    padding: 1rem;
-  }
-
-  #conn-modal > div {
-    margin: 0;
-    border-radius: 1rem 1rem 0 0;
-    position: fixed;
-    bottom: 0;
-    left: 0;
-    right: 0;
-    max-width: 100%;
-  }
+.dot-pulse {
+  animation: dot-pulse 1.2s ease-in-out infinite;
+  vertical-align: middle;
 }

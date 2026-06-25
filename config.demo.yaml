@@ -1,0 +1,29 @@
+# Demo config — runs without PostgreSQL or Redis.
+# All data is stored in-memory and lost on restart.
+# Any request is accepted without authentication headers.
+#
+# Usage:
+#   DATABRIDGE_CONFIG=config.demo.yaml python -m databridge
+
+demo: true
+
+server:
+  host: "0.0.0.0"
+  port: 5010
+  silence_probes: false
+
+# Not used in demo mode (no DB connection is opened), but required by the
+# config schema unless the field is empty.
+database_url: ""
+
+# Dev-only Fernet key — used to encrypt/decrypt connection credentials in-memory.
+# Regenerate for any real environment:
+#   python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+encryption_key: "Ks_7gv0quQuNMvwLHNhToPPgrQw7Z3Zjm2r-4mTJqF4="
+
+datasources: []
+
+datasinks:
+- name: "local"
+  type: local-zip
+  path: "/tmp/databridge-demo"

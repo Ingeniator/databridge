@@ -22,13 +22,14 @@ class ServerConfig:
     debug: bool = False
     silence_probes: bool = True
     hide_auth_inputs: bool = False
+    public_url: str = ""  # e.g. https://databridge.example.com — used for {{download_url}} in webhook templates
 
 
 _SYSTEM_SOURCE_VALID_KEYS = {
     "name", "type", "url", "bucket", "region", "access_key_id", "secret_access_key",
     "key_prefix", "addressing_style", "presign_expiry", "database", "table",
     "user", "password", "catalog", "schema_name", "endpoint", "public_endpoint",
-    "duckdb_temp_dir",
+    "duckdb_temp_dir", "search_column", "timestamp_column",
 }
 
 @dataclass(frozen=True)
@@ -51,6 +52,8 @@ class SystemSourceConfig:
     password: str = ""
     catalog: str = ""
     schema_name: str = ""
+    search_column: str = "message"
+    timestamp_column: str = "timestamp"
     duckdb_temp_dir: str = "/tmp/duckdb_temp"
 
     @property
@@ -59,10 +62,14 @@ class SystemSourceConfig:
         return uuid5(NAMESPACE_DNS, self.name)
 
 
-_DATASINK_VALID_KEYS = {"name", "type", "url", "path", "filename_template"}
+_DATASINK_VALID_KEYS = {
+    "name", "type", "url", "path", "filename_template",
+    "bucket", "region", "access_key_id", "secret_access_key", "endpoint", "key_prefix",
+}
 _DATASINK_SERVICE_TYPES = {"dataset-mock", "annotator-mock"}
 _DATASINK_LOCAL_TYPES = {"local-zip", "local-jsonl"}
-_DATASINK_ALL_TYPES = _DATASINK_SERVICE_TYPES | _DATASINK_LOCAL_TYPES
+_DATASINK_S3_TYPES = {"s3-jsonl", "s3-zip"}
+_DATASINK_ALL_TYPES = _DATASINK_SERVICE_TYPES | _DATASINK_LOCAL_TYPES | _DATASINK_S3_TYPES
 
 
 @dataclass(frozen=True)
@@ -72,6 +79,12 @@ class DatasinkConfig:
     url: str = ""
     path: str = ""
     filename_template: str = ""
+    bucket: str = ""
+    region: str = "us-east-1"
+    access_key_id: str = ""
+    secret_access_key: str = ""
+    endpoint: str = ""
+    key_prefix: str = ""
 
 
 @dataclass(frozen=True)
@@ -83,15 +96,18 @@ class ExportSettings:
     keepalive_interval_minutes: int = 2
     batch_size: int = 100
     redis_url: str = "redis://localhost:6379"
+    worker_metrics_port: int = 9101
+    webhook_allowed_url_prefixes: tuple[str, ...] = field(default_factory=tuple)
 
 
-_SETTINGS_VALID_KEYS = {"server", "database_url", "encryption_key", "datasources", "datasinks", "export"}
+_SETTINGS_VALID_KEYS = {"server", "database_url", "db_pool_max_size", "encryption_key", "datasources", "datasinks", "export", "demo"}
 _SERVER_VALID_KEYS = {
-    "host", "port", "workers", "root_path", "debug", "silence_probes", "hide_auth_inputs",
+    "host", "port", "workers", "root_path", "debug", "silence_probes", "hide_auth_inputs", "public_url",
 }
 _EXPORT_VALID_KEYS = {
     "stale_job_timeout_minutes", "max_concurrent_jobs_per_org", "job_ttl_days",
     "poll_interval_seconds", "keepalive_interval_minutes", "batch_size", "redis_url",
+    "worker_metrics_port", "webhook_allowed_url_prefixes",
 }
 
 @dataclass(frozen=True)
@@ -102,6 +118,8 @@ class Settings:
     datasources: tuple[SystemSourceConfig, ...]
     datasinks: tuple[DatasinkConfig, ...] = field(default_factory=tuple)
     export: ExportSettings = field(default_factory=ExportSettings)
+    db_pool_max_size: int = 10
+    demo: bool = False
 
 
 # ── Secret injection ─────────────────────────────────────────────────────────
@@ -224,11 +242,16 @@ def get_settings() -> Settings:
             raise ValueError(f"datasink '{sk_name}': 'url' is required for type {sk_type!r}")
         if sk_type in _DATASINK_LOCAL_TYPES and not sk.get("path"):
             raise ValueError(f"datasink '{sk_name}': 'path' is required for type {sk_type!r}")
+        if sk_type in _DATASINK_S3_TYPES and not sk.get("bucket"):
+            raise ValueError(f"datasink '{sk_name}': 'bucket' is required for type {sk_type!r}")
         sinks.append(DatasinkConfig(**sk))
 
     # export settings
     export_raw = raw.get("export") or {}
     _validate_keys(export_raw, _EXPORT_VALID_KEYS, "export")
+    if "webhook_allowed_url_prefixes" in export_raw:
+        export_raw = dict(export_raw)
+        export_raw["webhook_allowed_url_prefixes"] = tuple(export_raw["webhook_allowed_url_prefixes"])
     export_settings = ExportSettings(**export_raw)
 
     return Settings(
@@ -238,4 +261,6 @@ def get_settings() -> Settings:
         datasources=tuple(sources),
         datasinks=tuple(sinks),
         export=export_settings,
+        db_pool_max_size=raw.get("db_pool_max_size", 10),
+        demo=bool(raw.get("demo", False)),
     )

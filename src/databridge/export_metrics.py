@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from prometheus_client import Counter, Gauge
+from prometheus_client import Counter, Gauge, Histogram
 
 EXPORT_JOBS_CREATED = Counter(
     "export_jobs_created_total",
@@ -39,4 +39,29 @@ EXPORT_ORG_CONCURRENT_JOBS = Gauge(
     "export_org_concurrent_jobs",
     "Concurrent export jobs per org (running + pending)",
     ["org_id"],
+)
+MASKING_RULES_APPLIED = Counter(
+    "masking_rules_applied_total",
+    "Records that had masking rules applied",
+    ["org_id"],
+)
+SAMPLING_RECORDS_DROPPED = Counter(
+    "sampling_records_dropped_total",
+    "Records dropped by sampling strategy",
+    ["org_id"],
+)
+WEBHOOK_DELIVERY = Counter(
+    "webhook_delivery_total",
+    "Webhook delivery attempts",
+    ["org_id", "status"],
+)
+PII_FIELDS_REQUEST_DURATION = Histogram(
+    "pii_fields_request_duration_seconds",
+    "Latency of GET /pii-fields requests",
+    ["connection_type"],
+)
+PREVIEW_REQUEST_DURATION = Histogram(
+    "preview_request_duration_seconds",
+    "Latency of POST /preview requests",
+    ["connection_type"],
 )

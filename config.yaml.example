@@ -20,6 +20,9 @@ server:
 # PostgreSQL connection string — use vault or $VAR for the password
 database_url: "postgresql://postgres:${DB_PASSWORD}@localhost:5432/databridge"
 
+# asyncpg connection pool size (default: 10)
+# db_pool_max_size: 10
+
 # Fernet encryption key for user credentials stored in the database
 # Generate: python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
 encryption_key: "vault:DATABRIDGE_ENCRYPTION_KEY"
@@ -61,3 +64,32 @@ datasources: []
   #   url: "http://langfuse:3000"
   #   access_key_id: "vault:LF_PUBLIC_KEY"
   #   secret_access_key: "vault:LF_SECRET_KEY"
+
+datasinks: []
+  # ── Local ZIP archive ───────────────────────────────────────────────────────
+  # - name: "local-zip"
+  #   type: local-zip
+  #   path: "/data/exports"
+  #   filename_template: "{id}.json"   # optional; defaults to content hash
+  #
+  # ── Local JSONL file ────────────────────────────────────────────────────────
+  # - name: "local-jsonl"
+  #   type: local-jsonl
+  #   path: "/data/exports"
+  #
+  # ── Dataset mock service ────────────────────────────────────────────────────
+  # - name: "dataset-mock"
+  #   type: dataset-mock
+  #   url: "http://dataset-mock:9100"
+  #
+  # ── Annotator mock service ──────────────────────────────────────────────────
+  # - name: "annotator-mock"
+  #   type: annotator-mock
+  #   url: "http://annotator-mock:8010"
+
+# export:
+#   webhook_allowed_url_prefixes:   # restrict which hosts users may send test webhooks to
+#     - "https://hooks.slack.com/"
+#     - "https://api.example.com/webhooks/"
+#   # Leave the list empty (or omit the key) to allow any http/https URL.
+#   # http:// and https:// are always required; file://, gopher://, etc. are rejected.

@@ -86,7 +86,18 @@ async def get_auth(request: Request) -> AuthContext:
             except Exception:
                 pass
 
-    if get_settings().server.debug:
+    settings = get_settings()
+
+    if settings.demo:
+        return AuthContext(
+            public_key="demo/demo",
+            is_org_admin=True,
+            org_id="demo",
+            user_id="demo",
+            role="super_admin",
+        )
+
+    if settings.server.debug:
         logger.warning("auth_dev_fallback", path=path)
         return AuthContext(
             public_key="dev",

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import time
 from datetime import datetime, timezone, timedelta
 from typing import Any, Protocol
@@ -10,6 +11,43 @@ import httpx
 import structlog
 
 logger = structlog.get_logger(__name__)
+
+_OP_MAP = {"==": "=", "!=": "!=", ">=": ">=", "<=": "<=", ">": ">", "<": "<"}
+_RULE_RE = re.compile(r"(\w+)\s*(==|!=|>=|<=|>|<|contains)\s*'((?:[^'\\]|\\.)*)'", re.IGNORECASE)
+
+
+def _query_to_sql(expr: str, search_column: str) -> str | None:
+    """Translate a filter expression to a SQL condition fragment.
+
+    Structured rules like ``field == 'v'`` or ``a == 'x' AND b contains 'y'``
+    are converted to proper SQL equality/search conditions.  Anything that
+    doesn't match the structured pattern falls back to a full-text
+    ``positionCaseInsensitive`` search on *search_column*.  Returns None when
+    the expression is empty.
+    """
+    expr = expr.strip()
+    if not expr:
+        return None
+
+    tokens = re.split(r"\s+(?:AND|OR)\s+", expr, flags=re.IGNORECASE)
+    logic_ops = re.findall(r"\s+(AND|OR)\s+", expr, flags=re.IGNORECASE)
+
+    sql_parts: list[str] = []
+    for token in tokens:
+        m = _RULE_RE.fullmatch(token.strip())
+        if not m:
+            q_esc = expr.replace("'", "\\'")
+            return f"positionCaseInsensitive(toString({search_column}), '{q_esc}') > 0"
+        field, op, value = m.group(1), m.group(2), m.group(3)
+        if op.lower() == "contains":
+            sql_parts.append(f"positionCaseInsensitive(toString({field}), '{value}') > 0")
+        else:
+            sql_parts.append(f"{field} {_OP_MAP[op]} '{value}'")
+
+    result = sql_parts[0]
+    for i, logic in enumerate(logic_ops):
+        result += f" {logic} {sql_parts[i + 1]}"
+    return result
 
 _PING_TIMEOUT = 5.0
 
@@ -91,11 +129,19 @@ class BaseAdapter:
         return (url or "").rstrip("/")
 
     def _creds_dict(self) -> dict:
+        # For system sources conn is a dataclass — use its fields as base so
+        # adapters can read user/password/database/table without special-casing.
+        base: dict = {}
+        if not isinstance(self._conn, dict):
+            import dataclasses as _dc
+            if _dc.is_dataclass(self._conn):
+                base = _dc.asdict(self._conn)
+
         if isinstance(self._creds, dict):
-            return self._creds
+            return {**base, **self._creds}
         if hasattr(self._creds, "model_dump"):
-            return self._creds.model_dump()
-        return {}
+            return {**base, **self._creds.model_dump()}
+        return base
 
     async def ping(self) -> None:
         if self._health_path is None:
@@ -159,14 +205,15 @@ class ClickHouseConnectionAdapter(BaseAdapter):
         database = creds.get("database", "default")
         table = creds.get("table", "llogr_events")
 
+        search_column = creds.get("search_column", "message")
+        ts_col = creds.get("timestamp_column", "timestamp")
         conditions: list[str] = []
-        if query:
-            q_esc = query.replace("'", "\\'")
-            conditions.append(f"positionCaseInsensitive(toString(message), '{q_esc}') > 0")
-        if start:
-            conditions.append(f"timestamp >= parseDateTimeBestEffort('{start.isoformat()}')")
-        if end:
-            conditions.append(f"timestamp < parseDateTimeBestEffort('{end.isoformat()}')")
+        if sql_cond := _query_to_sql(query, search_column):
+            conditions.append(sql_cond)
+        if ts_col and start:
+            conditions.append(f"{ts_col} >= parseDateTimeBestEffort('{start.isoformat()}')")
+        if ts_col and end:
+            conditions.append(f"{ts_col} < parseDateTimeBestEffort('{end.isoformat()}')")
 
         where = f" WHERE {' AND '.join(conditions)}" if conditions else ""
         sql = f"SELECT * FROM {database}.{table}{where} LIMIT {limit} FORMAT JSONEachRow"
@@ -196,14 +243,15 @@ class ClickHouseConnectionAdapter(BaseAdapter):
         password = creds.get("password", "")
         database = creds.get("database", "default")
         table = creds.get("table", "llogr_events")
+        search_column = creds.get("search_column", "message")
+        ts_col = creds.get("timestamp_column", "timestamp")
         conditions: list[str] = []
-        if query:
-            q_esc = query.replace("'", "\\'")
-            conditions.append(f"positionCaseInsensitive(toString(message), '{q_esc}') > 0")
-        if start:
-            conditions.append(f"timestamp >= parseDateTimeBestEffort('{start.isoformat()}')")
-        if end:
-            conditions.append(f"timestamp < parseDateTimeBestEffort('{end.isoformat()}')")
+        if sql_cond := _query_to_sql(query, search_column):
+            conditions.append(sql_cond)
+        if ts_col and start:
+            conditions.append(f"{ts_col} >= parseDateTimeBestEffort('{start.isoformat()}')")
+        if ts_col and end:
+            conditions.append(f"{ts_col} < parseDateTimeBestEffort('{end.isoformat()}')")
         where = f" WHERE {' AND '.join(conditions)}" if conditions else ""
         sql = f"SELECT COUNT(*) FROM {database}.{table}{where} FORMAT JSONEachRow"
         params: dict = {"query": sql}
@@ -228,7 +276,39 @@ class ClickHouseConnectionAdapter(BaseAdapter):
         limit: int,
         offset: int,
     ) -> list[dict]:
-        return await self.preview(query, start, end, limit)
+        creds = self._creds_dict()
+        user = creds.get("user", "")
+        password = creds.get("password", "")
+        database = creds.get("database", "default")
+        table = creds.get("table", "llogr_events")
+        search_column = creds.get("search_column", "message")
+        ts_col = creds.get("timestamp_column", "timestamp")
+        conditions: list[str] = []
+        if sql_cond := _query_to_sql(query, search_column):
+            conditions.append(sql_cond)
+        if ts_col and start:
+            conditions.append(f"{ts_col} >= parseDateTimeBestEffort('{start.isoformat()}')")
+        if ts_col and end:
+            conditions.append(f"{ts_col} < parseDateTimeBestEffort('{end.isoformat()}')")
+        where = f" WHERE {' AND '.join(conditions)}" if conditions else ""
+        order_by = f" ORDER BY {ts_col}" if ts_col else ""
+        sql = f"SELECT * FROM {database}.{table}{where}{order_by} LIMIT {limit} OFFSET {offset} FORMAT JSONEachRow"
+        params: dict = {"query": sql}
+        if user:
+            params["user"] = user
+            params["password"] = password
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            r = await client.get(self._url + "/", params=params)
+            r.raise_for_status()
+        results: list[dict] = []
+        for line in r.text.strip().splitlines():
+            line = line.strip()
+            if line:
+                try:
+                    results.append(json.loads(line))
+                except json.JSONDecodeError:
+                    pass
+        return results
 
     async def schema(self, start: datetime | None, end: datetime | None) -> tuple[dict[str, dict], int]:
         return await super().schema(start, end)
@@ -239,49 +319,72 @@ class ClickHouseConnectionAdapter(BaseAdapter):
 class TrinoConnectionAdapter(BaseAdapter):
     _health_path = "/v1/info"
 
+    async def _execute(self, sql: str, user: str, row_limit: int | None = None) -> list[list]:
+        """Execute a Trino SQL statement, following nextUri until the query finishes."""
+        headers = {"X-Trino-User": user, "Content-Type": "text/plain"}
+        rows: list[list] = []
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            r = await client.post(f"{self._url}/v1/statement", content=sql, headers=headers)
+            r.raise_for_status()
+            data = r.json()
+            rows.extend(data.get("data") or [])
+            next_uri = data.get("nextUri")
+            while next_uri:
+                if row_limit is not None and len(rows) >= row_limit:
+                    await client.delete(next_uri)
+                    break
+                r = await client.get(next_uri, headers=headers)
+                r.raise_for_status()
+                data = r.json()
+                rows.extend(data.get("data") or [])
+                state = data.get("stats", {}).get("state", "")
+                next_uri = data.get("nextUri")
+                if state in ("FINISHED", "FAILED") and not next_uri:
+                    break
+        return rows
+
     async def preview(self, query: str, start: datetime | None, end: datetime | None, limit: int) -> list[dict]:
         creds = self._creds_dict()
         user = creds.get("user", "trino")
         catalog = creds.get("catalog", "")
         schema_name = creds.get("schema_name", "")
-
+        table_name = creds.get("table", "events")
+        table = f"{catalog}.{schema_name}.{table_name}" if catalog and schema_name else table_name
         conditions: list[str] = []
         if query:
             q_esc = query.replace("'", "''")
-            conditions.append(f"CAST(message AS VARCHAR) LIKE '%{q_esc}%'")
+            conditions.append(f"CAST({creds.get('search_column', 'message')} AS VARCHAR) LIKE '%{q_esc}%'")
         if start:
             conditions.append(f"timestamp >= TIMESTAMP '{start.strftime('%Y-%m-%d %H:%M:%S')}'")
         if end:
             conditions.append(f"timestamp < TIMESTAMP '{end.strftime('%Y-%m-%d %H:%M:%S')}'")
-
-        table = f"{catalog}.{schema_name}.events" if catalog and schema_name else "events"
         where = f" WHERE {' AND '.join(conditions)}" if conditions else ""
         sql = f"SELECT * FROM {table}{where} LIMIT {limit}"
 
         headers = {"X-Trino-User": user, "Content-Type": "text/plain"}
         results: list[dict] = []
+        columns: list[str] = []
 
-        async with httpx.AsyncClient(timeout=30.0) as client:
+        async with httpx.AsyncClient(timeout=60.0) as client:
             r = await client.post(f"{self._url}/v1/statement", content=sql, headers=headers)
             r.raise_for_status()
             data = r.json()
-
-            columns = [col["name"] for col in data.get("columns", [])]
-            for row in data.get("data", []):
+            columns = [col["name"] for col in data.get("columns") or []]
+            for row in data.get("data") or []:
                 results.append(dict(zip(columns, row)))
-
             next_uri = data.get("nextUri")
             while next_uri and len(results) < limit:
-                r = await client.get(next_uri)
+                r = await client.get(next_uri, headers=headers)
                 r.raise_for_status()
                 data = r.json()
                 if not columns:
-                    columns = [col["name"] for col in data.get("columns", [])]
-                for row in data.get("data", []):
+                    columns = [col["name"] for col in data.get("columns") or []]
+                for row in data.get("data") or []:
                     results.append(dict(zip(columns, row)))
-                if data.get("stats", {}).get("state") in ("FINISHED", "FAILED"):
-                    break
+                state = data.get("stats", {}).get("state", "")
                 next_uri = data.get("nextUri")
+                if state in ("FINISHED", "FAILED") and not next_uri:
+                    break
 
         return results[:limit]
 
@@ -290,24 +393,21 @@ class TrinoConnectionAdapter(BaseAdapter):
         user = creds.get("user", "trino")
         catalog = creds.get("catalog", "")
         schema_name = creds.get("schema_name", "")
+        table_name = creds.get("table", "events")
+        table = f"{catalog}.{schema_name}.{table_name}" if catalog and schema_name else table_name
         conditions: list[str] = []
         if query:
             q_esc = query.replace("'", "''")
-            conditions.append(f"CAST(message AS VARCHAR) LIKE '%{q_esc}%'")
+            conditions.append(f"CAST({creds.get('search_column', 'message')} AS VARCHAR) LIKE '%{q_esc}%'")
         if start:
             conditions.append(f"timestamp >= TIMESTAMP '{start.strftime('%Y-%m-%d %H:%M:%S')}'")
         if end:
             conditions.append(f"timestamp < TIMESTAMP '{end.strftime('%Y-%m-%d %H:%M:%S')}'")
-        table = f"{catalog}.{schema_name}.events" if catalog and schema_name else "events"
         where = f" WHERE {' AND '.join(conditions)}" if conditions else ""
         sql = f"SELECT COUNT(*) FROM {table}{where}"
-        headers = {"X-Trino-User": user, "Content-Type": "text/plain"}
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            r = await client.post(f"{self._url}/v1/statement", content=sql, headers=headers)
-            r.raise_for_status()
-            data = r.json()
-            for row in data.get("data", []):
-                return int(row[0])
+        rows = await self._execute(sql, user)
+        if rows:
+            return int(rows[0][0])
         return 0
 
     async def fetch_page(
@@ -322,26 +422,44 @@ class TrinoConnectionAdapter(BaseAdapter):
         user = creds.get("user", "trino")
         catalog = creds.get("catalog", "")
         schema_name = creds.get("schema_name", "")
+        table_name = creds.get("table", "events")
+        table = f"{catalog}.{schema_name}.{table_name}" if catalog and schema_name else table_name
         conditions: list[str] = []
         if query:
             q_esc = query.replace("'", "''")
-            conditions.append(f"CAST(message AS VARCHAR) LIKE '%{q_esc}%'")
+            conditions.append(f"CAST({creds.get('search_column', 'message')} AS VARCHAR) LIKE '%{q_esc}%'")
         if start:
             conditions.append(f"timestamp >= TIMESTAMP '{start.strftime('%Y-%m-%d %H:%M:%S')}'")
         if end:
             conditions.append(f"timestamp < TIMESTAMP '{end.strftime('%Y-%m-%d %H:%M:%S')}'")
-        table = f"{catalog}.{schema_name}.events" if catalog and schema_name else "events"
         where = f" WHERE {' AND '.join(conditions)}" if conditions else ""
         sql = f"SELECT * FROM {table}{where} LIMIT {limit} OFFSET {offset}"
+
         headers = {"X-Trino-User": user, "Content-Type": "text/plain"}
         results: list[dict] = []
-        async with httpx.AsyncClient(timeout=30.0) as client:
+        columns: list[str] = []
+
+        async with httpx.AsyncClient(timeout=60.0) as client:
             r = await client.post(f"{self._url}/v1/statement", content=sql, headers=headers)
             r.raise_for_status()
             data = r.json()
-            columns = [col["name"] for col in data.get("columns", [])]
-            for row in data.get("data", []):
+            columns = [col["name"] for col in data.get("columns") or []]
+            for row in data.get("data") or []:
                 results.append(dict(zip(columns, row)))
+            next_uri = data.get("nextUri")
+            while next_uri:
+                r = await client.get(next_uri, headers=headers)
+                r.raise_for_status()
+                data = r.json()
+                if not columns:
+                    columns = [col["name"] for col in data.get("columns") or []]
+                for row in data.get("data") or []:
+                    results.append(dict(zip(columns, row)))
+                state = data.get("stats", {}).get("state", "")
+                next_uri = data.get("nextUri")
+                if state in ("FINISHED", "FAILED") and not next_uri:
+                    break
+
         return results
 
     async def schema(self, start: datetime | None, end: datetime | None) -> tuple[dict[str, dict], int]:
@@ -356,11 +474,13 @@ class LangfuseConnectionAdapter(BaseAdapter):
             r = await client.get(f"{self._url}/api/public/health")
             r.raise_for_status()
 
+    def _langfuse_auth(self, creds: dict) -> tuple[str, str] | None:
+        public_key = creds.get("public_key", "") or creds.get("access_key_id", "")
+        secret_key = creds.get("secret_key", "") or creds.get("secret_access_key", "")
+        return (public_key, secret_key) if public_key else None
+
     async def preview(self, query: str, start: datetime | None, end: datetime | None, limit: int) -> list[dict]:
         creds = self._creds_dict()
-        public_key = creds.get("public_key", "")
-        secret_key = creds.get("secret_key", "")
-
         params: dict = {"limit": limit}
         if query:
             params["name"] = query
@@ -369,17 +489,14 @@ class LangfuseConnectionAdapter(BaseAdapter):
         if end:
             params["toTimestamp"] = end.isoformat()
 
-        auth = (public_key, secret_key) if public_key else None
         async with httpx.AsyncClient(timeout=30.0) as client:
-            r = await client.get(f"{self._url}/api/public/traces", params=params, auth=auth)
+            r = await client.get(f"{self._url}/api/public/traces", params=params, auth=self._langfuse_auth(creds))
             r.raise_for_status()
             data = r.json()
             return data.get("data", [])
 
     async def count(self, query: str, start: datetime | None, end: datetime | None) -> int:
         creds = self._creds_dict()
-        public_key = creds.get("public_key", "")
-        secret_key = creds.get("secret_key", "")
         params: dict = {"limit": 1}
         if query:
             params["name"] = query
@@ -387,9 +504,8 @@ class LangfuseConnectionAdapter(BaseAdapter):
             params["fromTimestamp"] = start.isoformat()
         if end:
             params["toTimestamp"] = end.isoformat()
-        auth = (public_key, secret_key) if public_key else None
         async with httpx.AsyncClient(timeout=30.0) as client:
-            r = await client.get(f"{self._url}/api/public/traces", params=params, auth=auth)
+            r = await client.get(f"{self._url}/api/public/traces", params=params, auth=self._langfuse_auth(creds))
             r.raise_for_status()
             data = r.json()
             return data.get("meta", {}).get("total", 0)
@@ -404,8 +520,6 @@ class LangfuseConnectionAdapter(BaseAdapter):
     ) -> list[dict]:
         page = (offset // limit) + 1 if limit else 1
         creds = self._creds_dict()
-        public_key = creds.get("public_key", "")
-        secret_key = creds.get("secret_key", "")
         params: dict = {"limit": limit, "page": page}
         if query:
             params["name"] = query
@@ -413,9 +527,8 @@ class LangfuseConnectionAdapter(BaseAdapter):
             params["fromTimestamp"] = start.isoformat()
         if end:
             params["toTimestamp"] = end.isoformat()
-        auth = (public_key, secret_key) if public_key else None
         async with httpx.AsyncClient(timeout=30.0) as client:
-            r = await client.get(f"{self._url}/api/public/traces", params=params, auth=auth)
+            r = await client.get(f"{self._url}/api/public/traces", params=params, auth=self._langfuse_auth(creds))
             r.raise_for_status()
             return r.json().get("data", [])
 
@@ -462,38 +575,45 @@ class S3ConnectionAdapter(BaseAdapter):
 
         await asyncio.wait_for(_head(), timeout=_PING_TIMEOUT)
 
-    async def preview(self, query: str, start: datetime | None, end: datetime | None, limit: int) -> list[dict]:
-        creds = self._creds_dict()
-        bucket = creds.get("bucket", "") or getattr(self._conn, "bucket", "")
-        key_prefix = creds.get("key_prefix", "") or getattr(self._conn, "key_prefix", "")
+    def _duckdb_con(self, creds: dict):
+        import duckdb
+        con = duckdb.connect()
+        try:
+            con.execute("INSTALL httpfs; LOAD httpfs;")
+        except Exception:
+            pass
         access_key = creds.get("access_key_id", "")
         secret_key = creds.get("secret_access_key", "")
         region = creds.get("region", "us-east-1")
         endpoint = creds.get("endpoint", "") or getattr(self._conn, "endpoint", "")
+        addressing_style = creds.get("addressing_style", "virtual")
+        if access_key:
+            con.execute(f"SET s3_access_key_id='{access_key}';")
+            con.execute(f"SET s3_secret_access_key='{secret_key}';")
+        con.execute(f"SET s3_region='{region}';")
+        if endpoint:
+            host = endpoint.rstrip("/").split("://")[-1]
+            con.execute(f"SET s3_endpoint='{host}';")
+            con.execute("SET s3_use_ssl=false;")
+        if addressing_style == "path":
+            con.execute("SET s3_url_style='path';")
+        return con
+
+    async def preview(self, query: str, start: datetime | None, end: datetime | None, limit: int) -> list[dict]:
+        creds = self._creds_dict()
+        bucket = creds.get("bucket", "") or getattr(self._conn, "bucket", "")
+        key_prefix = creds.get("key_prefix", "") or getattr(self._conn, "key_prefix", "")
 
         def _scan() -> list[dict]:
-            import duckdb
-            con = duckdb.connect()
-            try:
-                con.execute("INSTALL httpfs; LOAD httpfs;")
-            except Exception:
-                pass
-            if access_key:
-                con.execute(f"SET s3_access_key_id='{access_key}';")
-                con.execute(f"SET s3_secret_access_key='{secret_key}';")
-            con.execute(f"SET s3_region='{region}';")
-            if endpoint:
-                host = endpoint.rstrip("/").split("://")[-1]
-                con.execute(f"SET s3_endpoint='{host}';")
-                con.execute("SET s3_use_ssl=false;")
-
+            con = self._duckdb_con(creds)
             prefix = key_prefix.rstrip("/") + "/" if key_prefix else ""
             for fmt, reader in (
                 ("parquet", "read_parquet"),
+                ("jsonl", "read_json_auto"),
                 ("json", "read_json_auto"),
                 ("csv", "read_csv_auto"),
             ):
-                path = f"s3://{bucket}/{prefix}*.{fmt}"
+                path = f"s3://{bucket}/{prefix}**/*.{fmt}"
                 try:
                     rows = con.execute(f"SELECT * FROM {reader}('{path}') LIMIT {limit}").fetchall()
                     cols = [d[0] for d in (con.description or [])]
@@ -508,29 +628,17 @@ class S3ConnectionAdapter(BaseAdapter):
         creds = self._creds_dict()
         bucket = creds.get("bucket", "") or getattr(self._conn, "bucket", "")
         key_prefix = creds.get("key_prefix", "") or getattr(self._conn, "key_prefix", "")
-        access_key = creds.get("access_key_id", "")
-        secret_key = creds.get("secret_access_key", "")
-        region = creds.get("region", "us-east-1")
-        endpoint = creds.get("endpoint", "") or getattr(self._conn, "endpoint", "")
 
         def _count() -> int:
-            import duckdb
-            con = duckdb.connect()
-            try:
-                con.execute("INSTALL httpfs; LOAD httpfs;")
-            except Exception:
-                pass
-            if access_key:
-                con.execute(f"SET s3_access_key_id='{access_key}';")
-                con.execute(f"SET s3_secret_access_key='{secret_key}';")
-            con.execute(f"SET s3_region='{region}';")
-            if endpoint:
-                host = endpoint.rstrip("/").split("://")[-1]
-                con.execute(f"SET s3_endpoint='{host}';")
-                con.execute("SET s3_use_ssl=false;")
+            con = self._duckdb_con(creds)
             prefix = key_prefix.rstrip("/") + "/" if key_prefix else ""
-            for fmt, reader in (("parquet", "read_parquet"), ("json", "read_json_auto"), ("csv", "read_csv_auto")):
-                path = f"s3://{bucket}/{prefix}*.{fmt}"
+            for fmt, reader in (
+                ("parquet", "read_parquet"),
+                ("jsonl", "read_json_auto"),
+                ("json", "read_json_auto"),
+                ("csv", "read_csv_auto"),
+            ):
+                path = f"s3://{bucket}/{prefix}**/*.{fmt}"
                 try:
                     row = con.execute(f"SELECT COUNT(*) FROM {reader}('{path}')").fetchone()
                     return int(row[0]) if row else 0
@@ -551,29 +659,17 @@ class S3ConnectionAdapter(BaseAdapter):
         creds = self._creds_dict()
         bucket = creds.get("bucket", "") or getattr(self._conn, "bucket", "")
         key_prefix = creds.get("key_prefix", "") or getattr(self._conn, "key_prefix", "")
-        access_key = creds.get("access_key_id", "")
-        secret_key = creds.get("secret_access_key", "")
-        region = creds.get("region", "us-east-1")
-        endpoint = creds.get("endpoint", "") or getattr(self._conn, "endpoint", "")
 
         def _scan() -> list[dict]:
-            import duckdb
-            con = duckdb.connect()
-            try:
-                con.execute("INSTALL httpfs; LOAD httpfs;")
-            except Exception:
-                pass
-            if access_key:
-                con.execute(f"SET s3_access_key_id='{access_key}';")
-                con.execute(f"SET s3_secret_access_key='{secret_key}';")
-            con.execute(f"SET s3_region='{region}';")
-            if endpoint:
-                host = endpoint.rstrip("/").split("://")[-1]
-                con.execute(f"SET s3_endpoint='{host}';")
-                con.execute("SET s3_use_ssl=false;")
+            con = self._duckdb_con(creds)
             prefix = key_prefix.rstrip("/") + "/" if key_prefix else ""
-            for fmt, reader in (("parquet", "read_parquet"), ("json", "read_json_auto"), ("csv", "read_csv_auto")):
-                path = f"s3://{bucket}/{prefix}*.{fmt}"
+            for fmt, reader in (
+                ("parquet", "read_parquet"),
+                ("jsonl", "read_json_auto"),
+                ("json", "read_json_auto"),
+                ("csv", "read_csv_auto"),
+            ):
+                path = f"s3://{bucket}/{prefix}**/*.{fmt}"
                 try:
                     rows = con.execute(
                         f"SELECT * FROM {reader}('{path}') LIMIT {limit} OFFSET {offset}"

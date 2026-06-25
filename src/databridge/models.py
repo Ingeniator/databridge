@@ -30,6 +30,8 @@ class TrinoCredentials(BaseModel):
     password: str = ""
     catalog: str
     schema_name: str
+    table: str = "events"
+    search_column: str = "message"
 
 
 class LangfuseCredentials(BaseModel):
@@ -87,6 +89,8 @@ class PingResponse(BaseModel):
     status: Literal["reachable", "unreachable"]
     latency_ms: float | None = None
     error: str | None = None
+    auth_ok: bool | None = None       # None = not checked; True/False = credentials verified
+    auth_error: str | None = None
 
 
 # ── Pre-save test ─────────────────────────────────────────────────────────────
@@ -103,12 +107,15 @@ class PreviewRequest(BaseModel):
     query: str = ""
     start: datetime | None = None
     end: datetime | None = None
-    limit: Annotated[int, Field(ge=1, le=200)] = 50
+    time_field: str | None = None
+    limit: Annotated[int, Field(ge=1, le=100_000)] = 50
 
 
 class PreviewResponse(BaseModel):
     results: list[dict[str, Any]]
     connection_id: UUID
+    total_count: int = 0
+    schema_fields: dict = Field(default_factory=dict)
 
 
 # ── Schema discovery ──────────────────────────────────────────────────────────
@@ -146,3 +153,4 @@ class HealthResponse(BaseModel):
 class UiConfigResponse(BaseModel):
     connection_types: list[str]
     hide_auth_inputs: bool
+    webhook_allowed_url_prefixes: list[str] = []

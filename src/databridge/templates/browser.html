@@ -1,249 +1,683 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" class="light">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>databridge</title>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
-  <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined" rel="stylesheet" />
-  <script src="https://cdn.tailwindcss.com"></script>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Noto+Serif:wght@400;700&family=Public+Sans:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&display=swap" rel="stylesheet" />
+  <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+  <script>
+    tailwind.config = {
+      darkMode: "class",
+      theme: {
+        extend: {
+          colors: {
+            "inverse-surface": "#303031", "inverse-on-surface": "#f2f0f1",
+            "surface-container-high": "#e9e8e9", "on-secondary": "#ffffff",
+            "tertiary-fixed": "#f9e37a", "on-secondary-fixed": "#171c20",
+            "surface-variant": "#e3e2e3", "on-tertiary": "#ffffff",
+            "on-primary-fixed-variant": "#00419d", "inverse-primary": "#b1c5ff",
+            "outline": "#737784", "background": "#faf9fa", "secondary": "#5a5f63",
+            "on-primary": "#ffffff", "error-container": "#ffdad6",
+            "secondary-fixed-dim": "#c2c7cc", "primary": "#094cb2",
+            "surface-container-low": "#f5f3f4", "surface-container": "#efedee",
+            "primary-fixed-dim": "#b1c5ff", "on-surface": "#1b1c1d",
+            "tertiary": "#6d5e00", "on-error": "#ffffff", "surface-dim": "#dbdadb",
+            "surface-container-highest": "#e3e2e3", "on-primary-fixed": "#001946",
+            "tertiary-fixed-dim": "#dcc661", "secondary-fixed": "#dfe3e8",
+            "tertiary-container": "#bfab49", "on-primary-container": "#e7ebff",
+            "on-tertiary-fixed": "#211b00", "on-tertiary-fixed-variant": "#524600",
+            "on-background": "#1b1c1d", "primary-container": "#3366cc",
+            "on-surface-variant": "#434653", "surface-bright": "#faf9fa",
+            "error": "#ba1a1a", "on-tertiary-container": "#4a3f00",
+            "primary-fixed": "#d9e2ff", "outline-variant": "#c3c6d5",
+            "on-secondary-container": "#606569", "on-secondary-fixed-variant": "#42474b",
+            "surface-container-lowest": "#ffffff", "on-error-container": "#93000a",
+            "surface": "#faf9fa", "secondary-container": "#dfe3e8", "surface-tint": "#2259bf"
+          },
+          borderRadius: { "DEFAULT": "0.125rem", "lg": "0.25rem", "xl": "0.5rem", "full": "0.75rem" },
+          fontFamily: {
+            "headline": ["Noto Serif", "serif"], "display": ["Noto Serif", "serif"],
+            "body": ["Inter", "sans-serif"], "label": ["Public Sans", "sans-serif"],
+            "inter": ["Inter", "sans-serif"]
+          }
+        }
+      }
+    }
+  </script>
+  <style>
+    .material-symbols-outlined { font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24; }
+    .no-scrollbar::-webkit-scrollbar { display: none; }
+    .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+  </style>
   <link rel="stylesheet" href="/static/browser.css" />
 </head>
-<body class="bg-gray-50 min-h-screen font-inter" data-base="">
+<body class="bg-background text-on-surface font-body" data-base="">
 
-<!-- Nav bar -->
-<nav class="bg-white border-b border-gray-200 px-6 py-4 flex items-center justify-between shadow-sm">
-  <div class="flex items-center gap-3">
-    <span class="material-symbols-outlined text-indigo-600 text-2xl">cable</span>
-    <h1 id="page-title" class="text-xl font-semibold text-gray-900">databridge</h1>
-  </div>
-  <div class="flex items-center gap-3">
-    <button id="jobs-tab-btn"
-      class="flex items-center gap-2 border border-gray-300 hover:bg-gray-50 text-gray-700 px-4 py-2 rounded-lg text-sm font-medium transition-colors"
-      data-testid="jobs-tab">
-      <span class="material-symbols-outlined text-base">schedule</span>
-      Jobs
-    </button>
-    <button id="add-connection-btn"
-      class="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors"
-      data-testid="add-connection-btn">
-      <span class="material-symbols-outlined text-base">add</span>
-      Add Connection
-    </button>
-  </div>
-</nav>
-
-<main class="max-w-6xl mx-auto px-6 py-8">
-
-  <!-- Error / success toasts -->
-  <div id="error-toast" class="hidden fixed top-4 right-4 z-50 bg-red-600 text-white px-5 py-3 rounded-lg shadow-lg flex items-center gap-2 max-w-sm"
-       data-testid="error-toast">
-    <span class="material-symbols-outlined text-base">error</span>
-    <span id="error-toast-msg"></span>
-    <button onclick="document.getElementById('error-toast').classList.add('hidden')" class="ml-2 opacity-70 hover:opacity-100">✕</button>
-  </div>
-  <div id="success-toast" class="hidden fixed top-4 right-4 z-50 bg-green-600 text-white px-5 py-3 rounded-lg shadow-lg flex items-center gap-2 max-w-sm"
-       data-testid="success-toast">
-    <span class="material-symbols-outlined text-base">check_circle</span>
-    <span id="success-toast-msg"></span>
-    <button onclick="document.getElementById('success-toast').classList.add('hidden')" class="ml-2 opacity-70 hover:opacity-100">✕</button>
-  </div>
-
-  <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
-
-    <!-- Left column: connections lists -->
-    <div class="lg:col-span-2 space-y-6">
-
-      <!-- User connections -->
-      <section>
-        <h2 class="text-sm font-semibold text-gray-500 uppercase tracking-wider mb-3">My Connections</h2>
-        <div id="connections-list" class="space-y-3" data-testid="connections-list">
-          <!-- Cards injected by JS -->
-        </div>
-        <div id="empty-state" class="hidden text-center py-12 text-gray-400" data-testid="empty-state">
-          <span class="material-symbols-outlined text-5xl mb-3 block">cable</span>
-          <p class="text-sm">No connections yet. Click <strong>Add Connection</strong> to get started.</p>
-        </div>
-      </section>
-
-      <!-- System sources -->
-      <section id="system-sources-section" class="hidden" data-testid="system-sources-section">
-        <h2 class="text-sm font-semibold text-gray-500 uppercase tracking-wider mb-3">System Sources</h2>
-        <div id="system-sources-list" class="space-y-3">
-          <!-- System source cards injected by JS -->
-        </div>
-      </section>
-
-    </div>
-
-    <!-- Right column: preview + schema panels -->
-    <div class="space-y-4">
-
-      <!-- Preview panel -->
-      <div id="preview-panel" class="bg-white rounded-xl border border-gray-200 p-5 shadow-sm" data-testid="preview-panel">
-        <h3 class="font-semibold text-gray-800 mb-4 flex items-center gap-2">
-          <span class="material-symbols-outlined text-indigo-500">preview</span>
-          Preview Data
-        </h3>
-        <div class="space-y-3">
-          <input id="preview-query-input" type="text" placeholder="Filter query (optional)"
-            class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400"
-            data-testid="preview-query-input" />
-          <input id="preview-start-input" type="datetime-local"
-            class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400"
-            data-testid="preview-start-input" />
-          <input id="preview-end-input" type="datetime-local"
-            class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400"
-            data-testid="preview-end-input" />
-          <button id="preview-submit-btn"
-            class="w-full bg-indigo-600 hover:bg-indigo-700 disabled:bg-gray-300 text-white py-2 rounded-lg text-sm font-medium transition-colors"
-            data-testid="preview-submit-btn" disabled>
-            Run Preview
-          </button>
-        </div>
-        <div class="mt-4 overflow-x-auto">
-          <table id="preview-table" class="w-full text-xs text-left hidden" data-testid="preview-table">
-            <thead id="preview-thead" class="bg-gray-50 text-gray-600"></thead>
-            <tbody id="preview-tbody" class="divide-y divide-gray-100"></tbody>
-          </table>
-          <p id="preview-empty-msg" class="text-xs text-gray-400 mt-2 hidden">No results.</p>
-        </div>
-      </div>
-
-      <!-- Export & Destination block -->
-      <div id="export-block" class="hidden bg-white rounded-xl border border-indigo-200 p-5 shadow-sm" data-testid="export-block">
-        <h3 class="font-semibold text-gray-800 mb-4 flex items-center gap-2">
-          <span class="material-symbols-outlined text-indigo-500">upload</span>
-          Export &amp; Destination
-        </h3>
-        <div class="space-y-3">
-          <div>
-            <label class="text-xs font-medium text-gray-600 block mb-1">Datasink</label>
-            <select id="datasink-select"
-              class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400"
-              data-testid="datasink-select">
-              <option value="">Select datasink…</option>
-            </select>
-          </div>
-          <div>
-            <label class="text-xs font-medium text-gray-600 block mb-1">Destination Dataset</label>
-            <input id="destination-dataset-input" type="text" list="destination-datasets-list" placeholder="Dataset name"
-              class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400"
-              data-testid="destination-dataset-select" />
-            <datalist id="destination-datasets-list"></datalist>
-          </div>
-          <div class="flex items-center gap-2">
-            <input id="asset-resolution-toggle" type="checkbox"
-              class="w-4 h-4 text-indigo-600 rounded focus:ring-indigo-400"
-              data-testid="asset-resolution-toggle" />
-            <label for="asset-resolution-toggle" class="text-sm text-gray-700">Resolve Assets</label>
-          </div>
-          <!-- Asset resolution config (shown when toggle ON) -->
-          <div id="asset-resolution-config" class="hidden pl-4 border-l-2 border-indigo-100 space-y-3">
-            <div>
-              <label class="text-xs font-medium text-gray-600 block mb-1">Asset Datasink</label>
-              <select id="asset-datasink-select"
-                class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400"
-                data-testid="asset-datasink-select">
-                <option value="">Select datasink…</option>
-              </select>
-            </div>
-            <div>
-              <label class="text-xs font-medium text-gray-600 block mb-1">Asset Dataset (auto-derived)</label>
-              <input id="asset-dataset-label" type="text" readonly
-                class="w-full border border-gray-100 bg-gray-50 rounded-lg px-3 py-2 text-sm text-gray-500"
-                data-testid="asset-dataset-label" placeholder="{destination}_assets" />
-            </div>
-            <div>
-              <label class="text-xs font-medium text-gray-600 block mb-1">URL Fields to Resolve</label>
-              <div id="asset-url-fields-list" class="space-y-1" data-testid="asset-url-fields-list">
-                <p class="text-xs text-gray-400">Select a datasink first.</p>
-              </div>
-            </div>
-            <div>
-              <label class="text-xs font-medium text-gray-600 block mb-1">URL Prefix (optional)</label>
-              <input id="asset-url-prefix-input" type="text" placeholder="https://cdn.example.com/"
-                class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400"
-                data-testid="asset-url-prefix-input" />
-            </div>
-          </div>
-          <button id="export-btn"
-            class="w-full bg-indigo-600 hover:bg-indigo-700 disabled:bg-gray-300 text-white py-2 rounded-lg text-sm font-medium transition-colors"
-            data-testid="export-btn" disabled>
-            Export
-          </button>
-        </div>
-      </div>
-
-      <!-- Schema panel -->
-      <div id="schema-panel" class="bg-white rounded-xl border border-gray-200 p-5 shadow-sm" data-testid="schema-panel">
-        <h3 class="font-semibold text-gray-800 mb-4 flex items-center gap-2">
-          <span class="material-symbols-outlined text-indigo-500">schema</span>
-          Schema
-        </h3>
-        <button id="schema-discover-btn"
-          class="w-full bg-gray-100 hover:bg-gray-200 disabled:bg-gray-50 text-gray-700 py-2 rounded-lg text-sm font-medium transition-colors mb-3"
-          data-testid="schema-discover-btn" disabled>
-          Discover Schema
-        </button>
-        <div id="schema-fields" class="overflow-y-auto max-h-64" data-testid="schema-fields">
-          <!-- Field rows injected by JS -->
-        </div>
-      </div>
-
-    </div>
-  </div>
-
-</main>
-
-<!-- Jobs tab overlay -->
-<div id="jobs-panel" class="hidden fixed inset-0 z-30 bg-gray-50 overflow-auto">
-  <div class="max-w-4xl mx-auto px-6 py-8">
-    <div class="flex items-center justify-between mb-6">
-      <h2 class="text-xl font-semibold text-gray-900 flex items-center gap-2">
-        <span class="material-symbols-outlined text-indigo-500">schedule</span>
-        Export Jobs
-      </h2>
-      <button id="jobs-panel-close-btn" class="text-gray-400 hover:text-gray-600">
-        <span class="material-symbols-outlined">close</span>
-      </button>
-    </div>
-    <div id="jobs-list" class="space-y-3" data-testid="jobs-list">
-      <p id="jobs-empty-msg" class="text-center py-12 text-gray-400 text-sm">No export jobs yet.</p>
-    </div>
-  </div>
+<!-- ── Toasts ──────────────────────────────────────────────────────────────── -->
+<div id="error-toast" class="hidden fixed top-4 right-4 z-50 bg-error text-on-error px-5 py-3 rounded-xl shadow-lg flex items-center gap-2 max-w-sm"
+     data-testid="error-toast">
+  <span class="material-symbols-outlined text-base">error</span>
+  <span id="error-toast-msg"></span>
+  <button onclick="document.getElementById('error-toast').classList.add('hidden')" class="ml-2 opacity-70 hover:opacity-100">✕</button>
+</div>
+<div id="success-toast" class="hidden fixed top-4 right-4 z-50 bg-green-600 text-white px-5 py-3 rounded-xl shadow-lg flex items-center gap-2 max-w-sm"
+     data-testid="success-toast">
+  <span class="material-symbols-outlined text-base">check_circle</span>
+  <span id="success-toast-msg"></span>
+  <button onclick="document.getElementById('success-toast').classList.add('hidden')" class="ml-2 opacity-70 hover:opacity-100">✕</button>
 </div>
 
-<!-- Add / Edit connection modal -->
-<div id="conn-modal" class="hidden fixed inset-0 z-40 flex items-center justify-center bg-black/40 backdrop-blur-sm">
-  <div class="bg-white rounded-2xl shadow-2xl w-full max-w-lg mx-4 overflow-hidden">
-    <div class="flex items-center justify-between px-6 py-4 border-b border-gray-100">
-      <h2 id="modal-title" class="text-lg font-semibold text-gray-900">Add Connection</h2>
-      <button onclick="window.DB.closeModal()" class="text-gray-400 hover:text-gray-600">
+<!-- ── App Shell ───────────────────────────────────────────────────────────── -->
+<div class="flex flex-col h-screen overflow-hidden">
+
+  <!-- Top Nav Header -->
+  <header class="bg-surface-container-lowest border-b border-outline-variant/15 shadow-sm flex items-center px-6 py-3 z-30 flex-shrink-0">
+    <nav class="flex gap-6">
+      <button id="nav-tab-import-btn"
+        class="nav-tab nav-tab--active font-label font-bold"
+        data-testid="nav-tab-import"
+        onclick="window.DB.switchTab('import')">
+        Data Import
+      </button>
+      <button id="nav-tab-jobs-btn"
+        class="nav-tab font-label font-medium"
+        data-testid="nav-tab-jobs"
+        onclick="window.DB.switchTab('jobs')">
+        Jobs
+      </button>
+    </nav>
+  </header>
+
+  <!-- Content Area -->
+  <div class="flex-1 overflow-hidden">
+
+    <!-- ── Data Import View ──────────────────────────────────────────────── -->
+    <div id="data-import-view" class="h-full overflow-y-auto no-scrollbar" data-testid="data-import-view">
+
+      <!-- Connection Tab Bar (sticky) -->
+      <div class="sticky top-0 z-20 bg-surface-container-low px-8 pt-4 border-b border-outline-variant/15">
+        <div class="flex items-end justify-between">
+          <div id="conn-tab-bar-inner" class="flex gap-1 items-end">
+            <!-- connection tabs injected by JS -->
+            <button id="add-connection-tab-btn"
+              class="conn-tab flex items-center gap-1 shrink-0"
+              data-testid="add-connection-tab"
+              onclick="window.DB.openModal()">
+              <span class="material-symbols-outlined text-[18px]">add</span>
+              Add Connection
+            </button>
+          </div>
+          <div class="pb-3 flex gap-4 items-center">
+            <div class="flex flex-col items-end">
+              <span class="text-[10px] font-label text-on-surface-variant uppercase tracking-widest leading-none">Last Synced</span>
+              <span id="last-synced-label" class="text-xs font-medium text-on-surface" data-testid="last-synced-label">—</span>
+            </div>
+            <div class="h-8 w-px bg-outline-variant/30"></div>
+            <span id="health-badge" class="health-badge health-badge--healthy font-label text-[10px] px-3 py-1 rounded-full" data-testid="health-badge">HEALTHY STATUS</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Page Content -->
+      <div class="p-8 space-y-6 max-w-[1600px] mx-auto">
+
+        <!-- ── Refine Dataset ────────────────────────────────────────────── -->
+        <section class="bg-surface-container-low rounded-2xl p-6 shadow-sm border border-outline-variant/10" data-testid="refine-dataset-card">
+          <div class="flex items-center justify-between mb-4">
+            <h3 class="font-headline text-lg font-bold">Refine Dataset</h3>
+            <button id="clear-all-btn"
+              class="hidden text-xs font-label font-bold text-primary uppercase tracking-widest hover:underline"
+              data-testid="clear-all-btn"
+              onclick="window.DB.clearAll()">Clear All</button>
+          </div>
+          <div class="space-y-4">
+
+            <!-- Schema Discovery Accordion -->
+            <div id="schema-discovery-section" class="flex flex-col bg-surface-container-lowest rounded-xl border border-outline-variant/20 overflow-hidden" data-testid="schema-discovery-section">
+              <div class="flex items-center justify-between p-4">
+                <div class="flex items-center gap-2">
+                  <span class="material-symbols-outlined text-primary text-[20px]">database_schema</span>
+                  <h4 class="text-[10px] font-label font-bold text-on-surface uppercase tracking-widest">Schema Discovery</h4>
+                </div>
+                <div class="flex items-center gap-2">
+                  <span class="text-[10px] font-label text-on-surface-variant/60 italic mr-1">Inferred from sample data</span>
+                  <button id="schema-refresh-btn"
+                    class="icon-btn text-on-surface-variant hover:text-primary"
+                    data-testid="schema-refresh-btn"
+                    onclick="window.DB.refreshSchema()"
+                    aria-label="Refresh schema" title="Refresh schema">
+                    <span class="material-symbols-outlined text-[18px]">refresh</span>
+                  </button>
+                  <button id="schema-collapse-btn"
+                    class="icon-btn text-on-surface-variant hover:text-primary"
+                    data-testid="schema-collapse-btn"
+                    onclick="window.DB.toggleSchemaCollapse()"
+                    aria-label="Toggle schema">
+                    <span class="material-symbols-outlined text-[20px]">expand_more</span>
+                  </button>
+                </div>
+              </div>
+              <!-- Field chips injected by JS -->
+              <div id="schema-field-chips"
+                class="px-4 pb-4 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-x-4 gap-y-1.5 max-h-40 overflow-y-auto no-scrollbar">
+              </div>
+            </div>
+
+            <!-- Filter Row -->
+            <div class="bg-surface-container-lowest/60 rounded-xl border border-outline-variant/15 p-4">
+              <div class="grid grid-cols-1 lg:grid-cols-12 gap-6 items-end">
+                <!-- Time column -->
+                <div class="lg:col-span-4 space-y-2">
+                  <span id="time-field-badge"
+                    class="hidden font-label text-[9px] font-bold text-on-primary-fixed-variant uppercase tracking-widest px-2 py-1 bg-primary-fixed/40 rounded border border-primary-fixed-dim/50 cursor-pointer hover:bg-primary-fixed/60 transition-colors inline-block"
+                    data-testid="time-field-badge"
+                    onclick="window.DB.cycleTimeField()">
+                    FIELD: —
+                  </span>
+                  <select id="time-range-select"
+                    class="w-full px-4 py-2.5 bg-surface-container-lowest border border-outline-variant/30 rounded-lg text-sm font-medium appearance-none cursor-pointer focus:border-primary/50 focus:ring-0 disabled:opacity-40 disabled:cursor-not-allowed"
+                    data-testid="time-range-select"
+                    onchange="window.DB.onTimeRangeChange(this.value)"
+                    disabled>
+                    <option value="">No time range</option>
+                    <option value="1h">Last 1 hour</option>
+                    <option value="6h">Last 6 hours</option>
+                    <option value="24h">Last 24 hours</option>
+                    <option value="7d">Last 7 days</option>
+                    <option value="30d">Last 30 days</option>
+                    <option value="custom">Custom range…</option>
+                  </select>
+                  <div id="custom-range-row" class="hidden grid grid-cols-2 gap-2 pt-1">
+                    <div class="space-y-1">
+                      <label class="text-[9px] font-label font-bold uppercase tracking-widest text-on-surface-variant">From</label>
+                      <input id="custom-start-input" type="datetime-local"
+                        class="w-full px-2 py-1.5 bg-surface-container-lowest border border-outline-variant/30 rounded-lg text-xs font-mono focus:border-primary/50 focus:ring-0"
+                        data-testid="custom-start-input"
+                        onchange="window.DB.onCustomRangeChange()" />
+                    </div>
+                    <div class="space-y-1">
+                      <label class="text-[9px] font-label font-bold uppercase tracking-widest text-on-surface-variant">To</label>
+                      <input id="custom-end-input" type="datetime-local"
+                        class="w-full px-2 py-1.5 bg-surface-container-lowest border border-outline-variant/30 rounded-lg text-xs font-mono focus:border-primary/50 focus:ring-0"
+                        data-testid="custom-end-input"
+                        onchange="window.DB.onCustomRangeChange()" />
+                    </div>
+                  </div>
+                </div>
+                <!-- Predicate column -->
+                <div class="lg:col-span-8 space-y-2">
+                  <label class="block text-[10px] font-label font-bold uppercase tracking-widest text-on-surface-variant">Predicate Filter</label>
+                  <div class="relative flex items-center">
+                    <span class="absolute left-3 material-symbols-outlined text-outline-variant text-lg pointer-events-none">filter_alt</span>
+                    <input id="predicate-filter-input" type="text"
+                      placeholder="e.g. status == 'error' AND payload.val > 100"
+                      class="w-full pl-10 pr-12 py-2.5 bg-surface-container-lowest border border-outline-variant/30 rounded-lg text-sm font-mono placeholder:font-body placeholder:text-on-surface-variant/40 focus:border-primary focus:ring-0 transition-all"
+                      data-testid="predicate-filter-input"
+                      oninput="window.DB.onPredicateInput(this.value)"
+                      onkeydown="if(event.key==='Enter') window.DB.loadPreview()" />
+                    <button id="filter-advanced-btn"
+                      class="absolute right-2 p-1.5 rounded-md hover:bg-surface-container-low text-on-surface-variant hover:text-primary transition-colors"
+                      data-testid="filter-advanced-btn"
+                      onclick="window.DB.toggleAdvancedFilter()"
+                      aria-label="Advanced filter" title="Advanced filter">
+                      <span class="material-symbols-outlined text-[18px]">tune</span>
+                    </button>
+                  </div>
+                  <span id="predicate-error" class="hidden text-xs text-error"></span>
+                </div>
+              </div>
+            </div>
+
+          </div>
+        </section>
+
+        <!-- ── Data Preview ──────────────────────────────────────────────── -->
+        <section class="bg-surface-container-lowest rounded-2xl flex flex-col border border-outline-variant/15 overflow-hidden shadow-sm" data-testid="data-preview-section">
+          <div class="p-4 border-b border-outline-variant/10 flex justify-between items-center">
+            <div class="flex items-center gap-3">
+              <h3 class="font-headline font-bold">Data Preview</h3>
+              <div class="relative">
+                <button id="visibility-btn"
+                  class="flex items-center gap-1.5 px-3 py-1 bg-surface-container-low hover:bg-surface-container-high text-on-surface-variant hover:text-primary rounded-lg transition-colors border border-outline-variant/10 text-[10px] font-label font-bold uppercase tracking-widest"
+                  data-testid="visibility-btn"
+                  onclick="window.DB.toggleColumnPicker()"
+                  aria-label="Column visibility">
+                  <span class="material-symbols-outlined text-[18px]">visibility</span>
+                  Visibility
+                </button>
+                <div id="column-picker-dropdown" class="hidden absolute left-0 z-20 bg-surface-container-lowest border border-outline-variant/20 rounded-xl shadow-lg p-3 mt-1 min-w-48 max-h-64 overflow-y-auto">
+                  <p class="text-[10px] font-label font-medium text-on-surface-variant mb-2">Visible Columns</p>
+                  <div id="column-picker-list" class="space-y-1"><!-- checkboxes injected by JS --></div>
+                </div>
+              </div>
+            </div>
+            <div class="flex items-center gap-4">
+              <div class="flex items-center gap-1.5 bg-surface-container-low px-3 py-1 rounded-lg border border-outline-variant/10">
+                <span class="text-[10px] font-label uppercase tracking-widest text-on-surface-variant">Limit:</span>
+                <input id="limit-input" type="number" min="1" max="100000" value="50"
+                  class="text-[10px] font-label uppercase tracking-widest text-on-surface bg-transparent border-none outline-none w-14 p-0 focus:ring-0 [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
+                  data-testid="limit-badge"
+                  onchange="window.DB.onLimitChange(this.value)"
+                  onkeydown="if(event.key==='Enter'){ window.DB.onLimitChange(this.value); this.blur(); }" />
+              </div>
+              <span id="total-rows-display"
+                class="text-[10px] font-label font-bold text-on-surface-variant uppercase tracking-widest border-l pl-4 border-outline-variant/30"
+                data-testid="total-rows-display">TOTAL: —</span>
+            </div>
+          </div>
+          <div class="overflow-x-auto">
+            <table id="preview-table" class="w-full text-left border-collapse" data-testid="preview-table">
+              <thead id="preview-thead" class="bg-surface-container-low text-on-surface-variant uppercase text-[10px] font-label tracking-widest"></thead>
+              <tbody id="preview-tbody" class="text-xs font-mono divide-y divide-outline-variant/10 text-on-surface"></tbody>
+            </table>
+            <p id="preview-empty-msg" class="text-xs text-on-surface-variant/50 text-center py-8">Select a connection to preview data.</p>
+          </div>
+          <div class="p-3 flex justify-center border-t border-outline-variant/10">
+            <button id="load-more-btn"
+              class="hidden text-xs font-label text-primary hover:underline"
+              data-testid="load-more-btn"
+              onclick="window.DB.loadMoreRows()">
+              Load More Rows
+            </button>
+          </div>
+        </section>
+
+        <!-- ── Data Masking + Sampling ───────────────────────────────────── -->
+        <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+
+          <!-- Data Masking Card -->
+          <section class="bg-surface-container rounded-2xl p-6 border border-outline-variant/10 shadow-sm" data-testid="data-masking-card">
+            <div class="flex items-center justify-between mb-5">
+              <div class="flex items-center gap-3">
+                <span class="material-symbols-outlined text-primary">security</span>
+                <h3 class="font-headline font-bold">Data Masking</h3>
+              </div>
+              <label class="relative inline-flex items-center cursor-pointer">
+                <input id="masking-toggle" type="checkbox" class="sr-only peer"
+                  data-testid="masking-toggle"
+                  disabled
+                  onchange="window.DB.onMaskingToggle(this.checked)" />
+                <div class="w-10 h-5 bg-gray-200 rounded-full peer peer-checked:after:translate-x-full after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-primary"></div>
+              </label>
+            </div>
+            <p id="masking-hint" class="text-xs text-on-surface-variant/60 leading-relaxed">Enable to define field-level masking rules applied during export. Supports mask, hash, drop, and redact actions.</p>
+            <div id="masking-body" class="hidden space-y-4">
+              <div class="rounded-xl border border-outline-variant/20 bg-surface-container-lowest overflow-hidden">
+                <table class="w-full text-left border-collapse" data-testid="masking-rules-table" id="masking-rules-table">
+                  <thead>
+                    <tr class="bg-surface-container-low/60">
+                      <th class="px-4 py-2.5 text-[10px] font-label font-bold text-on-surface-variant uppercase tracking-widest border-b border-outline-variant/10">Field ID</th>
+                      <th class="px-4 py-2.5 text-[10px] font-label font-bold text-on-surface-variant uppercase tracking-widest border-b border-outline-variant/10">Action</th>
+                      <th class="px-2 py-2.5 border-b border-outline-variant/10 w-8"></th>
+                    </tr>
+                  </thead>
+                  <tbody id="masking-rules-tbody"><!-- rows injected by JS --></tbody>
+                </table>
+                <div class="p-3 border-t border-outline-variant/10">
+                  <button id="add-masking-rule-btn"
+                    class="flex items-center gap-1.5 px-3 py-1.5 text-primary hover:bg-primary/5 rounded-lg transition-colors"
+                    data-testid="add-masking-rule-btn"
+                    onclick="window.DB.addMaskingRule()">
+                    <span class="material-symbols-outlined text-[18px]">add</span>
+                    <span class="text-[10px] font-label font-bold uppercase tracking-widest">Add Row</span>
+                  </button>
+                </div>
+              </div>
+              <div class="p-3 bg-surface-container-low rounded-lg border border-outline-variant/10 flex items-center justify-between">
+                <span class="text-[10px] font-label font-bold text-on-surface-variant uppercase tracking-wider">PII Auto-Detection</span>
+                <label class="flex items-center gap-2 cursor-pointer">
+                  <input id="pii-auto-detection-toggle" type="checkbox"
+                    class="w-3 h-3 rounded text-primary"
+                    data-testid="pii-auto-detection-toggle"
+                    onchange="window.DB.onPiiAutoDetect(this.checked)" />
+                  <span class="text-[10px] font-label font-bold text-primary">ENABLED</span>
+                </label>
+              </div>
+              <div class="p-3 bg-surface-container-low rounded-lg border border-outline-variant/10 flex items-center justify-between">
+                <span class="text-[10px] font-label font-bold text-on-surface-variant uppercase tracking-wider">Apply Visibility Filter</span>
+                <label class="flex items-center gap-2 cursor-pointer">
+                  <input id="visibility-filter-toggle" type="checkbox"
+                    class="w-3 h-3 rounded text-primary"
+                    data-testid="visibility-filter-toggle"
+                    onchange="window.DB.onApplyVisibilityFilter(this.checked)" />
+                  <span class="text-[10px] font-label font-bold text-primary">ENABLED</span>
+                </label>
+              </div>
+            </div>
+          </section>
+
+          <!-- Sampling Strategy Card -->
+          <section class="bg-surface-container rounded-2xl p-6 border border-outline-variant/10 shadow-sm" data-testid="sampling-strategy-card">
+            <div class="flex items-center justify-between mb-4">
+              <div class="flex items-center gap-3">
+                <span class="material-symbols-outlined text-primary">percent</span>
+                <h3 class="font-headline font-bold">Sampling Strategy</h3>
+              </div>
+              <label class="relative inline-flex items-center cursor-pointer">
+                <input id="sampling-toggle" type="checkbox" class="sr-only peer"
+                  data-testid="sampling-toggle"
+                  disabled
+                  onchange="window.DB.onSamplingToggle(this.checked)" />
+                <div class="w-10 h-5 bg-gray-200 rounded-full peer peer-checked:after:translate-x-full after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-primary"></div>
+              </label>
+            </div>
+            <p id="sampling-hint" class="text-xs text-on-surface-variant/60 leading-relaxed">Enable to reduce export volume. Choose random, systematic, or stratified sampling and set the desired ratio.</p>
+            <div id="sampling-body" class="hidden space-y-4">
+              <div class="space-y-2">
+                <div class="flex items-center gap-2">
+                  <label class="text-[10px] font-label font-bold uppercase tracking-widest text-on-surface-variant">Method</label>
+                  <button id="stratified-info-btn" class="hidden text-on-surface-variant/50 hover:text-primary transition-colors"
+                    data-testid="stratified-info-btn"
+                    onclick="window.DB.toggleStratifiedInfo()" type="button"
+                    aria-label="Stratified sampling help">
+                    <span class="material-symbols-outlined text-[16px]">info</span>
+                  </button>
+                </div>
+                <div id="stratified-info-popup" class="hidden rounded-xl border border-outline-variant/20 bg-surface-container-lowest p-4 space-y-3 text-[11px] text-on-surface-variant leading-relaxed shadow-md">
+                  <p class="font-semibold text-on-surface">Stratified Sampling</p>
+                  <p>Records are bucketed by the <span class="font-mono text-primary">Target Column</span> value. The ratio or size quota is applied <em>per group independently</em>, so minority groups are preserved at the same rate as majority groups.</p>
+                  <div class="rounded-lg overflow-hidden border border-outline-variant/15">
+                    <table class="w-full text-[10px]">
+                      <thead>
+                        <tr class="bg-surface-container-low/70">
+                          <th class="px-3 py-1.5 text-left font-bold uppercase tracking-widest">Ratio / Size</th>
+                          <th class="px-3 py-1.5 text-left font-bold uppercase tracking-widest">Behaviour</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        <tr class="border-t border-outline-variant/10">
+                          <td class="px-3 py-1.5 font-mono">0.0 – 1.0</td>
+                          <td class="px-3 py-1.5">Probability — each record kept with this chance (e.g. <span class="font-mono">0.1</span> ≈ 10 % of each group)</td>
+                        </tr>
+                        <tr class="border-t border-outline-variant/10">
+                          <td class="px-3 py-1.5 font-mono">&gt; 1</td>
+                          <td class="px-3 py-1.5">Absolute quota — keep at most this many records per group (e.g. <span class="font-mono">500</span> → up to 500 per stratum)</td>
+                        </tr>
+                      </tbody>
+                    </table>
+                  </div>
+                  <p class="text-[10px] text-on-surface-variant/60">Note: the sampler is streaming — it does not know total group sizes in advance, so ratio mode is probabilistic.</p>
+                </div>
+                <div class="relative">
+                  <select id="sampling-method-select"
+                    class="w-full bg-surface-container-lowest border border-outline-variant/30 rounded-lg py-2.5 px-4 text-sm font-medium appearance-none cursor-pointer focus:border-primary/50 focus:ring-0"
+                    data-testid="sampling-method-select"
+                    onchange="window.DB.onSamplingMethodChange(this.value)">
+                    <option value="random">Random Sampling</option>
+                    <option value="systematic">Systematic Sampling</option>
+                    <option value="stratified">Stratified Sampling</option>
+                  </select>
+                  <span class="absolute right-3 top-1/2 -translate-y-1/2 material-symbols-outlined text-outline-variant pointer-events-none text-[20px]">expand_more</span>
+                </div>
+              </div>
+              <div class="bg-primary-fixed/20 p-3 rounded-lg border border-primary-fixed-dim/30">
+                <p id="sampling-method-desc" class="text-[11px] text-on-surface-variant leading-relaxed" data-testid="sampling-method-desc">
+                  Uniformly samples records at random.
+                </p>
+              </div>
+              <div id="sampling-target-col-row" class="hidden space-y-1.5">
+                <label class="text-[9px] font-label font-bold uppercase tracking-widest text-on-surface-variant">Target Column</label>
+                <input id="sampling-target-column" type="text"
+                  class="w-full bg-surface-container-lowest border border-outline-variant/30 rounded-lg py-2 px-3 text-xs font-mono focus:border-primary/50 focus:ring-0"
+                  data-testid="sampling-target-column"
+                  placeholder="select or type field"
+                  autocomplete="off"
+                  onfocus="window.DB._onFieldPickerFocus(this, false)"
+                  oninput="window.DB.onSamplingConfigChange(); window.DB._onFieldPickerInput(this)"
+                  onblur="window.DB._onFieldPickerBlur(this)" />
+              </div>
+              <div class="space-y-1.5">
+                <label class="text-[9px] font-label font-bold uppercase tracking-widest text-on-surface-variant">Ratio / Size</label>
+                <input id="sampling-ratio" type="number" min="0.001" step="0.001"
+                  class="w-full bg-surface-container-lowest border border-outline-variant/30 rounded-lg py-2 px-3 text-xs font-mono focus:border-primary/50 focus:ring-0"
+                  data-testid="sampling-ratio"
+                  placeholder="0.10" value="0.10"
+                  oninput="window.DB.onSamplingConfigChange()" />
+              </div>
+              <div class="space-y-1.5">
+                <label class="text-[9px] font-label font-bold uppercase tracking-widest text-on-surface-variant">Max Items</label>
+                <input id="sampling-max-items" type="number" min="1" step="1"
+                  class="w-full bg-surface-container-lowest border border-outline-variant/30 rounded-lg py-2 px-3 text-xs font-mono focus:border-primary/50 focus:ring-0"
+                  data-testid="sampling-max-items"
+                  placeholder="no limit"
+                  oninput="window.DB.onSamplingConfigChange()" />
+              </div>
+            </div>
+          </section>
+
+        </div>
+
+        <!-- ── Export & Destination ──────────────────────────────────────── -->
+        <section class="bg-surface-container-lowest rounded-2xl p-8 border border-outline-variant/15 shadow-sm" data-testid="export-destination-section">
+          <div class="space-y-8">
+            <div class="flex items-center gap-4">
+              <div class="w-12 h-12 rounded-2xl bg-surface-container-low flex items-center justify-center text-primary border border-outline-variant/10 flex-shrink-0">
+                <span class="material-symbols-outlined text-2xl" style="font-variation-settings:'FILL' 1">output</span>
+              </div>
+              <div>
+                <h3 class="font-headline text-xl font-bold">Export &amp; Destination</h3>
+                <p class="text-sm text-on-surface-variant mt-0.5">Configure asset resolution and destination sinks.</p>
+              </div>
+            </div>
+
+            <div class="grid grid-cols-1 lg:grid-cols-2 gap-10">
+              <!-- Asset Resolution -->
+              <div class="space-y-4">
+                <div class="flex items-center justify-between">
+                  <h4 class="font-headline text-base font-bold">Asset Resolution</h4>
+                  <label class="relative inline-flex items-center cursor-pointer">
+                    <input id="asset-resolution-toggle" type="checkbox" class="sr-only peer"
+                      data-testid="asset-resolution-toggle"
+                      disabled
+                      onchange="window.DB.onAssetResolutionToggle(this.checked)" />
+                    <div class="w-10 h-5 bg-gray-200 rounded-full peer peer-checked:after:translate-x-full after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-primary"></div>
+                  </label>
+                </div>
+                <p id="asset-resolution-hint" class="text-xs text-on-surface-variant/60 leading-relaxed">Enable to download and store linked assets (images, files) from URL fields into the asset dataset.</p>
+                <div id="asset-url-fields-section" class="hidden space-y-3">
+                  <div class="space-y-1.5">
+                    <label class="text-[10px] font-label font-bold uppercase tracking-widest text-on-surface-variant">Asset Dataset</label>
+                    <input id="asset-dataset-input" type="text"
+                      class="w-full bg-surface-container-low border-none rounded-xl py-3 px-4 text-sm font-mono focus:ring-1 focus:ring-primary/20"
+                      data-testid="asset-dataset-input"
+                      placeholder="{destination_dataset}_assets"
+                      oninput="this.dataset.userEdited='1'" />
+                  </div>
+                  <div class="space-y-1.5">
+                    <label class="text-[10px] font-label font-bold uppercase tracking-widest text-on-surface-variant">URL Fields (comma-separated)</label>
+                    <input id="asset-url-fields-input" type="text"
+                      class="w-full bg-surface-container-low border-none rounded-xl py-3 px-4 text-sm font-mono focus:ring-1 focus:ring-primary/20"
+                      placeholder="select fields (comma-separated)"
+                      autocomplete="off"
+                      onfocus="window.DB._onFieldPickerFocus(this, true)"
+                      oninput="window.DB._onFieldPickerInput(this)"
+                      onblur="window.DB._onFieldPickerBlur(this)" />
+                  </div>
+                  <div class="space-y-1.5">
+                    <label class="text-[10px] font-label font-bold uppercase tracking-widest text-on-surface-variant">URL Prefix</label>
+                    <input id="asset-url-prefix-input" type="text"
+                      class="w-full bg-surface-container-low border-none rounded-xl py-3 px-4 text-sm font-mono focus:ring-1 focus:ring-primary/20"
+                      placeholder="https://cdn.example.com/" />
+                  </div>
+                  <button id="test-asset-resolution-btn" type="button"
+                    class="flex items-center gap-2 px-4 py-2 rounded-xl border border-primary/30 text-primary hover:bg-primary/5 transition-colors text-[11px] font-label font-bold uppercase tracking-widest"
+                    data-testid="test-asset-resolution-btn"
+                    onclick="window.DB.testAssetResolution()">
+                    <span class="material-symbols-outlined text-[16px]">play_arrow</span>
+                    Test Resolution
+                  </button>
+                  <div id="asset-resolution-results" class="hidden space-y-2">
+                    <p class="text-[10px] font-label font-bold uppercase tracking-widest text-on-surface-variant">Sample Results</p>
+                    <div id="asset-resolution-results-body" class="rounded-xl border border-outline-variant/20 bg-surface-container-lowest overflow-hidden"></div>
+                  </div>
+                </div>
+              </div>
+              <!-- Select Sink -->
+              <div class="space-y-4">
+                <h4 class="font-headline text-base font-bold">Select Sink</h4>
+                <div class="space-y-3">
+                  <div class="space-y-1.5">
+                    <label class="text-[10px] font-label font-bold uppercase tracking-widest text-on-surface-variant">Destination</label>
+                    <div class="relative">
+                      <select id="datasink-select"
+                        class="w-full bg-surface-container-low border-none rounded-xl py-3 px-4 text-sm font-medium appearance-none cursor-pointer"
+                        data-testid="datasink-select"
+                        onchange="window.DB.onDatasinkChange(this.value)">
+                        <option value="">Select datasink…</option>
+                      </select>
+                      <span class="absolute right-3 top-1/2 -translate-y-1/2 material-symbols-outlined text-outline-variant pointer-events-none text-[20px]">expand_more</span>
+                    </div>
+                  </div>
+                  <div class="space-y-1.5">
+                    <label class="text-[10px] font-label font-bold uppercase tracking-widest text-on-surface-variant">Destination Dataset</label>
+                    <input id="destination-dataset-input" type="text"
+                      class="w-full bg-surface-container-low border-none rounded-xl py-3 px-4 text-sm font-medium focus:ring-1 focus:ring-primary/20"
+                      data-testid="destination-dataset-input"
+                      placeholder="dataset name"
+                      oninput="window.DB.onDatasetNameChange(this.value)" />
+                    <div class="space-y-2 hidden" id="destination-dataset-select-wrap">
+                      <div class="relative">
+                        <select id="destination-dataset-select"
+                          class="w-full bg-surface-container-low border-none rounded-xl py-3 px-4 text-sm font-medium appearance-none cursor-pointer"
+                          data-testid="destination-dataset-select"
+                          onchange="window.DB.onDestinationDatasetSelectChange(this.value)">
+                          <option value="">Select dataset…</option>
+                        </select>
+                        <span class="absolute right-3 top-1/2 -translate-y-1/2 material-symbols-outlined text-outline-variant pointer-events-none text-[20px]">expand_more</span>
+                      </div>
+                      <input id="destination-dataset-new-input" type="text"
+                        class="w-full bg-surface-container-low border-none rounded-xl py-3 px-4 text-sm font-medium focus:ring-1 focus:ring-primary/20 hidden"
+                        data-testid="destination-dataset-new-input"
+                        placeholder="New name…" />
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Export Button -->
+            <div class="flex justify-end pt-4 border-t border-outline-variant/10">
+              <button id="export-btn"
+                class="export-btn flex items-center gap-3 px-12 py-4 rounded-xl text-lg font-headline font-bold w-1/3 justify-center"
+                data-testid="export-btn"
+                onclick="window.DB.startExport()">
+                <span class="material-symbols-outlined">send</span>
+                Export
+              </button>
+            </div>
+          </div>
+        </section>
+
+        <!-- ── Webhook Configuration ─────────────────────────────────────── -->
+        <section class="bg-surface-container rounded-2xl p-6 border border-outline-variant/10 shadow-sm" data-testid="webhook-config-card">
+          <div class="flex items-center justify-between mb-5">
+            <div class="flex items-center gap-3">
+              <span class="material-symbols-outlined text-primary">webhook</span>
+              <h3 class="font-headline font-bold">Webhook Configuration</h3>
+            </div>
+            <label class="relative inline-flex items-center cursor-pointer">
+              <input id="webhook-toggle" type="checkbox" class="sr-only peer"
+                data-testid="webhook-toggle"
+                disabled
+                onchange="window.DB.onWebhookToggle(this.checked)" />
+              <div class="w-10 h-5 bg-gray-200 rounded-full peer peer-checked:after:translate-x-full after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-primary"></div>
+            </label>
+          </div>
+          <p id="webhook-hint" class="text-xs text-on-surface-variant/60 leading-relaxed">Enable to notify external services upon job completion.</p>
+          <div id="webhook-body" class="hidden space-y-4">
+            <div class="space-y-1.5">
+              <label class="text-[10px] font-label font-bold uppercase tracking-widest text-on-surface-variant">Webhook URL</label>
+              <div id="webhook-allowed-prefixes" class="hidden flex items-center flex-wrap gap-1.5"></div>
+              <div class="relative flex items-center">
+                <span class="absolute left-4 material-symbols-outlined text-outline-variant text-lg pointer-events-none">link</span>
+                <input id="webhook-url-input" type="url"
+                  class="w-full bg-surface-container-low border-none rounded-xl py-3 pl-12 pr-4 text-sm font-mono focus:ring-1 focus:ring-primary/20"
+                  data-testid="webhook-url-input"
+                  placeholder="https://api.service.com/webhook"
+                  oninput="window.DB.onWebhookUrlChange(this.value)" />
+              </div>
+              <p id="webhook-url-error" class="hidden text-xs text-error font-medium mt-1" data-testid="webhook-url-error"></p>
+            </div>
+            <div class="space-y-1.5">
+              <div class="flex items-center justify-between">
+                <label class="text-[10px] font-label font-bold uppercase tracking-widest text-on-surface-variant">Payload Template <span class="normal-case font-normal text-on-surface-variant/60">(optional)</span></label>
+                <span class="text-[10px] text-on-surface-variant/50 font-mono">{{job_id}} {{status}} {{org_id}} {{destination_dataset}} {{records_processed}} {{records_skipped}} {{error}} {{download_url}}</span>
+              </div>
+              <textarea id="webhook-payload-input"
+                class="w-full bg-surface-container-low border-none rounded-xl py-3 px-4 text-sm font-mono focus:ring-1 focus:ring-primary/20 resize-y min-h-[80px]"
+                data-testid="webhook-payload-input"
+                placeholder='{"text": "Job {{job_id}} {{status}} — {{records_processed}} records"}'
+                oninput="window.DB.onWebhookPayloadChange(this.value)"></textarea>
+            </div>
+            <button id="test-webhook-btn"
+              class="flex items-center gap-2 px-4 py-2 bg-primary-container text-on-primary rounded-xl font-label font-bold text-[10px] uppercase tracking-widest hover:opacity-90 active:scale-95 transition-all"
+              data-testid="test-webhook-btn"
+              onclick="window.DB.testWebhook()">
+              <span class="material-symbols-outlined text-[18px]">send</span>
+              Test Webhook
+            </button>
+          </div>
+        </section>
+
+      </div><!-- /page content -->
+
+      <!-- Footer -->
+      <footer class="flex items-center px-8 py-4 border-t border-outline-variant/10 mt-4 bg-surface-container-lowest">
+        <a class="font-label text-[10px] uppercase tracking-widest text-on-surface-variant/60 hover:text-primary transition-colors" href="/docs" target="_blank" rel="noopener noreferrer">API Reference</a>
+      </footer>
+
+    </div><!-- /data-import-view -->
+
+    <!-- ── Jobs View ──────────────────────────────────────────────────────── -->
+    <div id="jobs-view" class="hidden h-full overflow-y-auto no-scrollbar" data-testid="jobs-view">
+      <div class="p-8 max-w-4xl mx-auto">
+        <div class="flex items-center gap-3 mb-6">
+          <span class="material-symbols-outlined text-primary text-2xl">schedule</span>
+          <h2 class="font-headline text-2xl font-bold">Export Jobs</h2>
+        </div>
+        <div id="jobs-list" class="space-y-3">
+          <p id="jobs-empty-msg" class="text-center py-16 text-on-surface-variant/50 text-sm font-label" data-testid="jobs-empty-msg">No export jobs yet.</p>
+          <!-- Job rows injected by JS -->
+        </div>
+      </div>
+    </div>
+
+  </div><!-- /flex-1 content area -->
+</div><!-- /app shell -->
+
+<!-- ── Connection Modal ───────────────────────────────────────────────────── -->
+<div id="conn-modal" class="hidden fixed inset-0 z-40 flex items-center justify-center bg-black/40 backdrop-blur-sm" data-testid="conn-modal">
+  <div class="bg-surface-container-lowest rounded-2xl shadow-2xl w-full max-w-lg mx-4 overflow-hidden">
+    <div class="flex items-center justify-between px-6 py-4 border-b border-outline-variant/10">
+      <h2 id="modal-title" class="font-headline text-lg font-bold text-on-surface">Add Connection</h2>
+      <button onclick="window.DB.closeModal()" class="text-on-surface-variant hover:text-on-surface transition-colors">
         <span class="material-symbols-outlined">close</span>
       </button>
     </div>
     <form id="conn-form" class="px-6 py-5 space-y-4" onsubmit="return false">
       <div>
-        <label class="text-xs font-medium text-gray-600 block mb-1">Label</label>
+        <label class="text-[10px] font-label font-bold uppercase tracking-widest text-on-surface-variant block mb-1.5">Label</label>
         <input id="conn-label-input" type="text" maxlength="120" required
-          class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400"
+          class="w-full border border-outline-variant/30 bg-surface-container-low rounded-xl px-4 py-2.5 text-sm focus:border-primary/50 focus:ring-0"
           data-testid="conn-label-input" placeholder="My ClickHouse" />
       </div>
       <div class="grid grid-cols-2 gap-3">
         <div>
-          <label class="text-xs font-medium text-gray-600 block mb-1">Type</label>
+          <label class="text-[10px] font-label font-bold uppercase tracking-widest text-on-surface-variant block mb-1.5">Type</label>
           <select id="conn-type-select"
-            class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400"
-            data-testid="conn-type-select" onchange="window.DB.updateCredFields()">
+            class="w-full border border-outline-variant/30 bg-surface-container-low rounded-xl px-4 py-2.5 text-sm focus:border-primary/50 focus:ring-0"
+            data-testid="conn-type-select"
+            onchange="window.DB.updateCredFields()">
           </select>
         </div>
         <div>
-          <label class="text-xs font-medium text-gray-600 block mb-1">Role</label>
+          <label class="text-[10px] font-label font-bold uppercase tracking-widest text-on-surface-variant block mb-1.5">Role</label>
           <select id="conn-role-select"
-            class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400"
+            class="w-full border border-outline-variant/30 bg-surface-container-low rounded-xl px-4 py-2.5 text-sm focus:border-primary/50 focus:ring-0"
             data-testid="conn-role-select">
             <option value="source">source</option>
             <option value="sink">sink</option>
@@ -251,27 +685,67 @@
         </div>
       </div>
       <div>
-        <label class="text-xs font-medium text-gray-600 block mb-1">Connection URL</label>
+        <label class="text-[10px] font-label font-bold uppercase tracking-widest text-on-surface-variant block mb-1.5">Connection URL</label>
         <input id="conn-url-input" type="url" required
-          class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400"
+          class="w-full border border-outline-variant/30 bg-surface-container-low rounded-xl px-4 py-2.5 text-sm focus:border-primary/50 focus:ring-0"
           data-testid="conn-url-input" placeholder="http://host:port" />
       </div>
-      <div id="cred-fields" class="space-y-3">
-        <!-- Credential fields injected by JS based on type -->
-      </div>
+      <div id="cred-fields" class="space-y-3"><!-- Credential fields injected by JS --></div>
       <div class="flex gap-3 pt-2">
         <button type="button" id="conn-test-btn"
-          class="flex-1 border border-indigo-300 text-indigo-600 hover:bg-indigo-50 py-2 rounded-lg text-sm font-medium transition-colors"
-          data-testid="conn-test-btn" onclick="window.DB.testConnection()">
+          class="flex-1 border border-primary/30 text-primary hover:bg-primary/5 py-2.5 rounded-xl text-sm font-medium transition-colors"
+          data-testid="conn-test-btn"
+          onclick="window.DB.testConnection()">
           Test
         </button>
         <button type="submit" id="conn-submit-btn"
-          class="flex-1 bg-indigo-600 hover:bg-indigo-700 text-white py-2 rounded-lg text-sm font-medium transition-colors"
-          data-testid="conn-submit-btn" onclick="window.DB.submitConnection()">
+          class="flex-1 bg-primary hover:opacity-90 text-on-primary py-2.5 rounded-xl text-sm font-medium transition-colors"
+          data-testid="conn-submit-btn"
+          onclick="window.DB.submitConnection()">
           Save
         </button>
       </div>
     </form>
+  </div>
+</div>
+
+<!-- ── Filter Rules Modal ─────────────────────────────────────────────────── -->
+<div id="filter-modal" class="hidden fixed inset-0 z-40 flex items-center justify-center bg-black/40 backdrop-blur-sm" data-testid="advanced-filter-panel">
+  <div class="bg-surface-container-lowest rounded-2xl shadow-2xl w-full max-w-xl mx-4 overflow-hidden flex flex-col" style="max-height: 80vh">
+    <div class="flex items-center justify-between px-6 py-4 border-b border-outline-variant/10 flex-shrink-0">
+      <div class="flex items-center gap-3">
+        <span class="material-symbols-outlined text-primary text-[20px]">tune</span>
+        <h2 class="font-headline text-lg font-bold text-on-surface">Filter Rules</h2>
+      </div>
+      <div class="flex items-center gap-3">
+        <span class="text-[10px] font-label text-on-surface-variant uppercase tracking-widest">Join</span>
+        <select id="filter-logic-select" class="border border-outline-variant/30 bg-surface-container-low rounded-lg px-2 py-1 text-xs font-label font-medium hidden">
+          <option value="AND">AND</option>
+          <option value="OR">OR</option>
+        </select>
+        <button onclick="window.DB.closeFilterModal()" class="text-on-surface-variant hover:text-on-surface transition-colors ml-2">
+          <span class="material-symbols-outlined">close</span>
+        </button>
+      </div>
+    </div>
+    <div class="px-6 py-4 overflow-y-auto flex-1 no-scrollbar">
+      <div id="filter-rules-list" class="space-y-2"><!-- rows injected by JS --></div>
+      <button class="mt-3 flex items-center gap-1.5 text-xs font-label font-bold text-primary hover:underline uppercase tracking-widest"
+        onclick="window.DB.addFilterRule()">
+        <span class="material-symbols-outlined text-[16px]">add</span>
+        Add Rule
+      </button>
+    </div>
+    <div class="px-6 py-4 border-t border-outline-variant/10 flex justify-end gap-3 flex-shrink-0">
+      <button onclick="window.DB.closeFilterModal()"
+        class="px-5 py-2 rounded-xl border border-outline-variant/30 text-sm font-medium text-on-surface-variant hover:bg-surface-container-low transition-colors">
+        Cancel
+      </button>
+      <button onclick="window.DB.applyFilterModal()"
+        class="px-5 py-2 rounded-xl bg-primary text-on-primary text-sm font-medium hover:opacity-90 transition-all">
+        Apply
+      </button>
+    </div>
   </div>
 </div>
 

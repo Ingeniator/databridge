@@ -32,8 +32,7 @@ class LocalZipSink(BaseSink):
             return hashlib.sha256(blob).hexdigest()[:16] + ".json"
 
     async def ping(self) -> None:
-        if not self._path.exists():
-            raise OSError(f"Path does not exist: {self._path}")
+        self._path.mkdir(parents=True, exist_ok=True)
         test_file = self._path / ".write_test"
         try:
             test_file.touch()
@@ -41,10 +40,10 @@ class LocalZipSink(BaseSink):
         except OSError as exc:
             raise OSError(f"Path not writable: {self._path}") from exc
 
-    async def list_datasets(self) -> list[str]:
+    async def list_datasets(self) -> list[dict[str, str]]:
         if not self._path.exists():
             return []
-        return [p.stem for p in self._path.glob("*.zip")]
+        return [{"name": p.stem, "uid": p.stem} for p in self._path.glob("*.zip")]
 
     async def create_dataset(self, name: str) -> None:
         self._path.mkdir(parents=True, exist_ok=True)
@@ -57,12 +56,17 @@ class LocalZipSink(BaseSink):
         dataset: str,
         record: dict,
         filename: str | None = None,
-    ) -> None:
+    ) -> str:
         if dataset not in self._buffers:
             await self.create_dataset(dataset)
         _, zf = self._buffers[dataset]
         fname = filename or self._resolve_filename(record)
-        zf.writestr(fname, json.dumps(record))
+        raw = record.get("data")
+        if raw is not None and isinstance(raw, str):
+            zf.writestr(fname, bytes.fromhex(raw))
+        else:
+            zf.writestr(fname, json.dumps(record))
+        return f"{dataset}/{fname}"
 
     async def finalise(self) -> None:
         for name, (buf, zf) in self._buffers.items():

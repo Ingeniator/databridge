@@ -1,6 +1,6 @@
 # Export Pipeline — Implemented Contract
 
-**Date**: 2026-06-02 | **Branch**: `001-datasink-export`
+**Date**: 2026-06-03 | **Branch**: `002-browser-ui-redesign` (updated from `001-datasink-export`)
 
 ## Overview
 
@@ -51,21 +51,6 @@ Jobs with `status IN ('completed', 'failed')` and `completed_at < NOW() - job_tt
 
 Max concurrent active (pending + running) jobs per org: **5** (configurable via `export.max_concurrent_jobs_per_org`). Enforced atomically via `pg_advisory_xact_lock` on the org_id. Exceeding returns `429 Too Many Requests`.
 
-## Metrics
-
-All 8 Prometheus instruments defined in `export_metrics.py`:
-
-| Metric | Type | Labels |
-|---|---|---|
-| `export_jobs_created_total` | Counter | `org_id`, `sink_type` |
-| `export_jobs_completed_total` | Counter | `org_id`, `sink_type` |
-| `export_jobs_failed_total` | Counter | `org_id`, `sink_type` |
-| `export_active_jobs` | Gauge | `org_id` |
-| `export_records_per_second` | Gauge | `sink_type` |
-| `export_asset_resolution_success_total` | Counter | — |
-| `export_asset_resolution_failed_total` | Counter | — |
-| `export_org_concurrent_jobs` | Gauge | `org_id` |
-
 ## API Endpoints
 
 | Method | Path | Description |
@@ -78,6 +63,7 @@ All 8 Prometheus instruments defined in `export_metrics.py`:
 | `GET` | `/api/v1/export-jobs/{id}` | Get single job |
 | `POST` | `/api/v1/export-jobs/{id}/retry` | Retry a failed job (creates new job) |
 | `GET` | `/api/v1/export-jobs/{id}/download` | Download the output file (local sinks only) |
+| `GET` | `/api/v1/connections/{id}/pii-fields` | Returns candidate PII field names for masking |
 
 ## File Downloads (Local Sinks)
 
@@ -89,6 +75,43 @@ For `local-zip` and `local-jsonl` sinks, the output file is served via the downl
 ```
 
 The job ID in the filename prevents collisions between multiple exports to the same dataset name. Auth is enforced — only the job owner (or org_admin/super_admin) can download. Returns `409` if the job is not yet completed, `404` if the file is missing from disk.
+
+## Data Masking (added 2026-06-03)
+
+When `masking_rules` is non-empty, the worker applies `apply_masking(record, rules)` to each record before writing to the sink. See `specs/current/masking.md` for rule types.
+
+## Sampling (added 2026-06-03)
+
+When `sampling_config` is set, records are filtered through `SamplingBuffer` before sink writes. Skipped records increment `records_skipped`. See `specs/current/sampling.md` for strategy details.
+
+## Webhook (added 2026-06-03)
+
+When `webhook_enabled=true` and `webhook_url` is set, the worker fires a background `POST` to `webhook_url` after `finalise()` completes. Payload: `{job_id, status: "completed", records_processed}`. Fire-and-forget — does not block the worker.
+
+## Worker Record Loop (updated order of operations)
+
+1. Fetch page from adapter
+2. For each record: apply **sampling** (skip if dropped) → apply **masking** → resolve **assets** → write to sink
+
+## Metrics (updated)
+
+All Prometheus instruments defined in `export_metrics.py`:
+
+| Metric | Type | Labels |
+|---|---|---|
+| `export_jobs_created_total` | Counter | `org_id`, `sink_type` |
+| `export_jobs_completed_total` | Counter | `org_id`, `sink_type` |
+| `export_jobs_failed_total` | Counter | `org_id`, `sink_type` |
+| `export_active_jobs` | Gauge | `org_id` |
+| `export_records_per_second` | Gauge | `sink_type` |
+| `export_asset_resolution_success_total` | Counter | — |
+| `export_asset_resolution_failed_total` | Counter | — |
+| `export_org_concurrent_jobs` | Gauge | `org_id` |
+| `masking_rules_applied_total` | Counter | `org_id` |
+| `sampling_records_dropped_total` | Counter | `org_id` |
+| `webhook_delivery_total` | Counter | `org_id`, `status` |
+| `pii_fields_request_duration_seconds` | Histogram | `connection_type` |
+| `preview_request_duration_seconds` | Histogram | `connection_type` |
 
 ## Asset Resolution
 

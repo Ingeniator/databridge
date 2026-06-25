@@ -74,6 +74,7 @@ async def test_debug_fallback():
     from databridge.auth import get_auth
     with patch("databridge.auth.get_settings") as mock_settings:
         mock_settings.return_value.server.debug = True
+        mock_settings.return_value.demo = False
         result = await get_auth(_make_request())
     assert result.org_id == "dev"
     assert result.user_id == "dev"

@@ -2,6 +2,16 @@ import pytest
 import structlog.testing
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from unittest.mock import patch, MagicMock
+
+
+@pytest.fixture(autouse=True)
+def _no_debug_mode():
+    mock_settings = MagicMock()
+    mock_settings.server.debug = False
+    mock_settings.demo = False
+    with patch("databridge.auth.get_settings", return_value=mock_settings):
+        yield
 
 
 def _make_app():

@@ -1,0 +1,17 @@
+services:
+  mock-openapi-service:
+    image: python:3.13-slim
+    working_dir: /app
+    command: ["python", "mock-openapi-service.py"]
+    environment:
+      PORT: "8080"
+      MOCK_API_TOKEN: "relay-token"
+    ports:
+      - "8095:8080"
+    volumes:
+      - ./mock-openapi-service.py:/app/mock-openapi-service.py:ro
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/health')"]
+      interval: 5s
+      timeout: 3s
+      retries: 10

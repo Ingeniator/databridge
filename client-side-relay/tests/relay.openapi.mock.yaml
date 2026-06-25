@@ -1,0 +1,27 @@
+source:
+  type: openapi
+  spec: http://localhost:8095/openapi.json
+  baseUrl: http://localhost:8095
+  operationId: listEvents
+  auth:
+    type: bearer
+    token: relay-token
+  parameters:
+    limit: 2
+  pagination:
+    type: cursor
+    cursorParam: cursor
+    nextCursorPath: $.next_cursor
+    itemsPath: $.items
+  output:
+    format: jsonl
+    recordPath: $.items
+
+destination:
+  databridgeUrl: http://localhost:5010
+  sink: dataset-mock
+  dataset: mock-openapi-events
+  mode: replace
+
+transfer:
+  chunkRecords: 2

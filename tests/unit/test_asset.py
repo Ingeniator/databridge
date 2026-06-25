@@ -32,7 +32,7 @@ async def test_resolve_assets_with_prefix():
     from databridge.export.asset import resolve_assets
 
     mock_sink = MagicMock()
-    mock_sink.post_file = AsyncMock()
+    mock_sink.post_file = AsyncMock(return_value=None)
 
     with respx.mock:
         respx.get("https://cdn.example.com/img.png").mock(
@@ -98,3 +98,75 @@ def test_resolve_assets_prefix_empty_uses_field_value_as_is():
     schema = {"download_url": {"type": "string", "example": "https://files.example.com/doc.pdf"}}
     result = detect_asset_url_fields(schema, [])
     assert "download_url" in result
+
+
+# --- S3 media link tests ---
+
+def test_detect_media_url_field_by_name():
+    from databridge.export.asset import detect_asset_url_fields
+    schema = {"media_url": {"type": "string", "example": "https://my-bucket.s3.amazonaws.com/videos/clip.mp4"}}
+    result = detect_asset_url_fields(schema, [])
+    assert "media_url" in result
+
+
+def test_detect_s3_url_from_sample_record():
+    from databridge.export.asset import detect_asset_url_fields
+    schema = {"attachment": {"type": "string"}}
+    records = [{"attachment": "https://my-bucket.s3.amazonaws.com/files/report.pdf"}]
+    result = detect_asset_url_fields(schema, records)
+    assert "attachment" in result
+
+
+@pytest.mark.asyncio
+async def test_resolve_assets_s3_media_url():
+    from databridge.export.asset import resolve_assets
+
+    s3_url = "https://my-bucket.s3.amazonaws.com/media/video.mp4"
+    mock_sink = MagicMock()
+    mock_sink.post_file = AsyncMock(return_value=None)
+
+    with respx.mock:
+        respx.get(s3_url).mock(return_value=httpx.Response(200, content=b"\x00\x01\x02\x03"))
+        result = await resolve_assets(
+            record={"id": "rec-1", "media_url": s3_url},
+            url_fields=["media_url"],
+            url_prefix="",
+            asset_sink=mock_sink,
+            asset_dataset="media_assets",
+        )
+
+    assert result["id"] == "rec-1"
+    assert result["media_url"] == "video.mp4"
+    mock_sink.post_file.assert_called_once_with(
+        "media_assets",
+        {"data": "00010203", "source_url": s3_url},
+        "video.mp4",
+    )
+
+
+@pytest.mark.asyncio
+async def test_resolve_assets_s3_presigned_url_with_query_params():
+    from databridge.export.asset import resolve_assets
+
+    # Pre-signed S3 URL with query parameters — filename is extracted before '?'
+    s3_presigned = (
+        "https://my-bucket.s3.amazonaws.com/uploads/photo.jpg"
+        "?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Expires=3600"
+    )
+    mock_sink = MagicMock()
+    mock_sink.post_file = AsyncMock(return_value=None)
+
+    with respx.mock:
+        respx.get(s3_presigned).mock(return_value=httpx.Response(200, content=b"jpeg_data"))
+        result = await resolve_assets(
+            record={"media_url": s3_presigned},
+            url_fields=["media_url"],
+            url_prefix="",
+            asset_sink=mock_sink,
+            asset_dataset="media_assets",
+        )
+
+    # The stored filename comes from the last path segment (before query string)
+    stored_filename = mock_sink.post_file.call_args[0][2]
+    assert "photo.jpg" in stored_filename
+    assert result["media_url"] == stored_filename
