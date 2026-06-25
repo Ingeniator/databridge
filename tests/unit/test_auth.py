@@ -9,6 +9,7 @@ from unittest.mock import patch, MagicMock
 def _no_debug_mode():
     mock_settings = MagicMock()
     mock_settings.server.debug = False
+    mock_settings.demo = False
     with patch("databridge.auth.get_settings", return_value=mock_settings):
         yield
 

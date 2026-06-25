@@ -31,20 +31,29 @@ class RequestIDMiddleware(BaseHTTPMiddleware):
 async def lifespan(app: FastAPI):
     settings = get_settings()
     setup_logging(debug=settings.server.debug, silence_probes=settings.server.silence_probes)
-    logger.info("service_startup", version="0.1.0")
-    app.state.pool = await create_pool()
+    logger.info("service_startup", version="0.1.0", demo=settings.demo)
 
-    # ARQ pool for enqueueing export jobs
-    try:
-        import arq
-        from arq.connections import RedisSettings
-        from databridge.routes.export_jobs import set_arq_pool
-        arq_pool = await arq.create_pool(RedisSettings.from_dsn(settings.export.redis_url))
-        app.state.arq_pool = arq_pool
-        set_arq_pool(arq_pool)
-    except Exception as exc:
-        logger.warning("arq_pool_unavailable", error=str(exc))
-        app.state.arq_pool = None
+    from databridge.routes.export_jobs import set_arq_pool
+
+    if settings.demo:
+        from databridge.db.demo_pool import DemoArqPool, DemoPool
+        demo_pool = DemoPool()
+        app.state.pool = demo_pool
+        demo_arq = DemoArqPool(pool=demo_pool, settings=settings)
+        app.state.arq_pool = demo_arq
+        set_arq_pool(demo_arq)
+        logger.info("demo_mode_active", note="in-memory store, no postgres or redis required")
+    else:
+        app.state.pool = await create_pool()
+        try:
+            import arq
+            from arq.connections import RedisSettings
+            arq_pool = await arq.create_pool(RedisSettings.from_dsn(settings.export.redis_url))
+            app.state.arq_pool = arq_pool
+            set_arq_pool(arq_pool)
+        except Exception as exc:
+            logger.warning("arq_pool_unavailable", error=str(exc))
+            app.state.arq_pool = None
 
     yield
     await app.state.pool.close()

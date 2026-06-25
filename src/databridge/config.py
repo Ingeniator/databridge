@@ -100,7 +100,7 @@ class ExportSettings:
     webhook_allowed_url_prefixes: tuple[str, ...] = field(default_factory=tuple)
 
 
-_SETTINGS_VALID_KEYS = {"server", "database_url", "db_pool_max_size", "encryption_key", "datasources", "datasinks", "export"}
+_SETTINGS_VALID_KEYS = {"server", "database_url", "db_pool_max_size", "encryption_key", "datasources", "datasinks", "export", "demo"}
 _SERVER_VALID_KEYS = {
     "host", "port", "workers", "root_path", "debug", "silence_probes", "hide_auth_inputs", "public_url",
 }
@@ -119,6 +119,7 @@ class Settings:
     datasinks: tuple[DatasinkConfig, ...] = field(default_factory=tuple)
     export: ExportSettings = field(default_factory=ExportSettings)
     db_pool_max_size: int = 10
+    demo: bool = False
 
 
 # ── Secret injection ─────────────────────────────────────────────────────────
@@ -261,4 +262,5 @@ def get_settings() -> Settings:
         datasinks=tuple(sinks),
         export=export_settings,
         db_pool_max_size=raw.get("db_pool_max_size", 10),
+        demo=bool(raw.get("demo", False)),
     )
