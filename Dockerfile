@@ -29,6 +29,7 @@ COPY alembic.ini ./
 COPY src/databridge/db/migrations/ src/databridge/db/migrations/
 COPY worker/ worker/
 COPY config.yaml.example ./config.yaml.example
+COPY entrypoint.py start.sh ./
 
 ENV PATH="/app/.venv/bin:$PATH" \
     DATABRIDGE_CONFIG="/app/config.yaml" \
@@ -36,4 +37,4 @@ ENV PATH="/app/.venv/bin:$PATH" \
 
 EXPOSE 5010
 
-CMD ["uvicorn", "databridge.main:app", "--host", "0.0.0.0", "--port", "5010"]
+CMD ["./start.sh"]
