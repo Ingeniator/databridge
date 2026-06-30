@@ -62,6 +62,33 @@ class SystemSourceConfig:
         return uuid5(NAMESPACE_DNS, self.name)
 
 
+@dataclass(frozen=True)
+class DatabaseConfig:
+    uri: str
+    database: str = ""
+    schema: str = ""
+    ssl_mode: str = ""
+    user: str = ""
+    password: str = ""
+
+    def to_dsn(self) -> str:
+        from urllib.parse import quote_plus, urlencode
+        userinfo = ""
+        if self.user:
+            userinfo = quote_plus(self.user)
+            if self.password:
+                userinfo += f":{quote_plus(self.password)}"
+            userinfo += "@"
+        db = f"/{self.database}" if self.database else ""
+        params: dict[str, str] = {}
+        if self.ssl_mode:
+            params["sslmode"] = self.ssl_mode
+        if self.schema:
+            params["options"] = f"-csearch_path={self.schema}"
+        qs = f"?{urlencode(params)}" if params else ""
+        return f"postgresql://{userinfo}{self.uri}{db}{qs}"
+
+
 _DATASINK_VALID_KEYS = {
     "name", "type", "url", "path", "filename_template",
     "bucket", "region", "access_key_id", "secret_access_key", "endpoint", "key_prefix",
@@ -100,7 +127,9 @@ class ExportSettings:
     webhook_allowed_url_prefixes: tuple[str, ...] = field(default_factory=tuple)
 
 
-_SETTINGS_VALID_KEYS = {"server", "database_url", "db_pool_max_size", "encryption_key", "datasources", "datasinks", "export", "demo"}
+_DATABASE_VALID_KEYS = {"uri", "database", "schema", "ssl_mode", "user", "password"}
+
+_SETTINGS_VALID_KEYS = {"server", "database_url", "database", "db_pool_max_size", "encryption_key", "datasources", "datasinks", "export", "demo"}
 _SERVER_VALID_KEYS = {
     "host", "port", "workers", "root_path", "debug", "silence_probes", "hide_auth_inputs", "public_url",
 }
@@ -254,9 +283,19 @@ def get_settings() -> Settings:
         export_raw["webhook_allowed_url_prefixes"] = tuple(export_raw["webhook_allowed_url_prefixes"])
     export_settings = ExportSettings(**export_raw)
 
+    # database URL — accept either a raw string or a structured block
+    if "database" in raw and isinstance(raw["database"], dict):
+        db_raw = raw["database"]
+        _validate_keys(db_raw, _DATABASE_VALID_KEYS, "database")
+        if "uri" not in db_raw:
+            raise ValueError("database block requires 'uri'")
+        database_url = DatabaseConfig(**db_raw).to_dsn()
+    else:
+        database_url = raw.get("database_url", "")
+
     return Settings(
         server=server,
-        database_url=raw.get("database_url", ""),
+        database_url=database_url,
         encryption_key=raw.get("encryption_key", ""),
         datasources=tuple(sources),
         datasinks=tuple(sinks),

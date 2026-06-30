@@ -3,7 +3,9 @@
 # Any request is accepted without authentication headers.
 #
 # Usage:
-#   DATABRIDGE_CONFIG=config.demo.yaml python -m databridge
+#   make demo
+#   # or manually:
+#   DATABRIDGE_CONFIG=config.demo.yaml uv run python -m entrypoint
 
 demo: true
 
@@ -21,6 +23,15 @@ database_url: ""
 #   python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
 encryption_key: "Ks_7gv0quQuNMvwLHNhToPPgrQw7Z3Zjm2r-4mTJqF4="
 
+# Add your own datasources here — they appear as system sources in the UI.
+# Supported types: clickhouse, s3, trino, langfuse, dataset
+# Example:
+# datasources:
+# - name: "demo-clickhouse"
+#   type: clickhouse
+#   url: "http://localhost:8123"
+#   database: "default"
+#   table: "events"
 datasources: []
 
 datasinks:

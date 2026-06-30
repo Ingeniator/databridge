@@ -1,7 +1,10 @@
-.PHONY: dev dev-worker dev-up dev-down test test-unit test-integration test-e2e coverage migrate lint
+.PHONY: dev demo dev-worker dev-up dev-down test test-unit test-integration test-e2e coverage migrate lint
 
 dev:
 	uv run uvicorn databridge.main:app --host 0.0.0.0 --port 5010 --reload
+
+demo:
+	DATABRIDGE_CONFIG=config.demo.yaml uv run python -m entrypoint
 
 dev-worker:
 	uv run arq databridge.export.worker.WorkerSettings
