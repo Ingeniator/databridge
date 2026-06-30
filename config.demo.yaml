@@ -23,18 +23,30 @@ database_url: ""
 #   python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
 encryption_key: "Ks_7gv0quQuNMvwLHNhToPPgrQw7Z3Zjm2r-4mTJqF4="
 
-# Add your own datasources here — they appear as system sources in the UI.
-# Supported types: clickhouse, s3, trino, langfuse, dataset
-# Example:
-# datasources:
-# - name: "demo-clickhouse"
-#   type: clickhouse
-#   url: "http://localhost:8123"
-#   database: "default"
-#   table: "events"
-datasources: []
+datasources:
+- name: "llogr-events"
+  type: clickhouse
+  url: "http://localhost:8123"
+  database: "default"
+  table: "llogr_events"
+  user: "default"
+  password: ""
+  search_column: "body"
+
+- name: "media-events"
+  type: clickhouse
+  url: "http://localhost:8123"
+  database: "default"
+  table: "media_events"
+  user: "default"
+  password: ""
+  timestamp_column: "recorded_at"
 
 datasinks:
-- name: "local"
+- name: "local-zip"
   type: local-zip
+  path: "/tmp/databridge-demo"
+
+- name: "local-jsonl"
+  type: local-jsonl
   path: "/tmp/databridge-demo"

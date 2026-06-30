@@ -1,0 +1,12 @@
+services:
+  databridge:
+    build:
+      context: .
+      target: runtime
+    ports:
+      - "5010:5010"
+    environment:
+      DATABRIDGE_CONFIG: /app/config.yaml
+      PYTHONUNBUFFERED: "1"
+    volumes:
+      - ./config.demo.yaml:/app/config.yaml:ro
