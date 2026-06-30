@@ -168,10 +168,14 @@ def _load_vault_secrets(vault_path: str) -> dict[str, str]:
                 break
         if "=" in line:
             k, _, v = line.partition("=")
-            secrets[k.strip()] = v.strip()
         elif ": " in line:
             k, _, v = line.partition(": ")
-            secrets[k.strip()] = v.strip()
+        else:
+            continue
+        v = v.strip()
+        if len(v) >= 2 and v[0] == v[-1] and v[0] in ("'", '"'):
+            v = v[1:-1]
+        secrets[k.strip()] = v
     return secrets
 
 

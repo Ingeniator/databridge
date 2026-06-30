@@ -109,6 +109,31 @@ def test_unresolvable_vault_raises(tmp_path, monkeypatch):
         get_settings()
 
 
+def test_vault_quoted_password_with_special_chars(tmp_path, monkeypatch):
+    from urllib.parse import quote_plus, unquote_plus
+    password = 'vPc,!j2kLjpcHd4_Kn5u!$.Ks456'
+    vault = tmp_path / "vault_secrets"
+    vault.write_text(f'DB_PASSWORD="{password}"\n')
+    monkeypatch.setenv("VAULT_SECRETS_PATH", str(vault))
+    cfg = _write_config(tmp_path, """
+        database:
+          uri: "localhost:5432"
+          database: testdb
+          user: testuser
+          password: "vault:DB_PASSWORD"
+        encryption_key: "somekey"
+        datasources: []
+    """)
+    monkeypatch.setenv("DATABRIDGE_CONFIG", str(cfg))
+    from databridge.config import get_settings
+    s = get_settings()
+    assert s.database_url.endswith("/testdb")
+    # special chars are percent-encoded in the DSN; decode to verify the raw password survived intact
+    encoded = quote_plus(password)
+    assert encoded in s.database_url
+    assert unquote_plus(encoded) == password
+
+
 def test_singleton(tmp_path, monkeypatch):
     from cryptography.fernet import Fernet
     key = Fernet.generate_key().decode()
