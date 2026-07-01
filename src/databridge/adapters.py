@@ -578,6 +578,8 @@ class S3ConnectionAdapter(BaseAdapter):
     def _duckdb_con(self, creds: dict):
         import duckdb
         con = duckdb.connect()
+        temp_dir = creds.get("duckdb_temp_dir", "") or "/tmp/duckdb_temp"
+        con.execute(f"SET temp_directory='{temp_dir}';")
         try:
             con.execute("INSTALL httpfs; LOAD httpfs;")
         except Exception:

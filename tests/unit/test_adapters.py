@@ -29,3 +29,26 @@ def test_no_type_branch_in_adapters():
     assert "conn.type ==" not in src
     assert "connection.type ==" not in src
     assert "from databridge.backends" not in src
+
+
+def test_duckdb_con_applies_temp_dir(tmp_path):
+    from databridge.adapters import S3ConnectionAdapter
+
+    temp_dir = str(tmp_path / "duckdb_spill")
+    adapter = S3ConnectionAdapter({}, {})
+    con = adapter._duckdb_con({"duckdb_temp_dir": temp_dir})
+    try:
+        assert con.execute("SELECT current_setting('temp_directory')").fetchone()[0] == temp_dir
+    finally:
+        con.close()
+
+
+def test_duckdb_con_defaults_temp_dir(tmp_path):
+    from databridge.adapters import S3ConnectionAdapter
+
+    adapter = S3ConnectionAdapter({}, {})
+    con = adapter._duckdb_con({})
+    try:
+        assert con.execute("SELECT current_setting('temp_directory')").fetchone()[0] == "/tmp/duckdb_temp"
+    finally:
+        con.close()
