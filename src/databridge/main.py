@@ -5,7 +5,9 @@ from contextlib import asynccontextmanager
 
 import structlog
 from fastapi import FastAPI, Request
+from fastapi.exception_handlers import http_exception_handler
 from fastapi.responses import JSONResponse
+from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from databridge.config import get_settings
@@ -79,6 +81,13 @@ def create_app() -> FastAPI:
         logger.error("unhandled_exception", path=request.url.path,
                      method=request.method, exc_info=True)
         return JSONResponse(status_code=500, content={"detail": "Internal server error"})
+
+    @app.exception_handler(StarletteHTTPException)
+    async def http_exception_logging_handler(request: Request, exc: StarletteHTTPException):
+        if exc.status_code >= 500:
+            logger.error("http_exception", path=request.url.path,
+                         method=request.method, status_code=exc.status_code, detail=exc.detail)
+        return await http_exception_handler(request, exc)
 
     from databridge.routes.connections import router as connections_router
     from databridge.routes.datasinks import router as datasinks_router
