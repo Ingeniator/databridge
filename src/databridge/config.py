@@ -85,8 +85,24 @@ class DatabaseConfig:
             params["sslmode"] = self.ssl_mode
         if self.schema:
             params["options"] = f"-csearch_path={self.schema}"
+
+        authority = self.uri
+        if "," in self.uri:
+            # Multi-host HA cluster (e.g. "host1:5432,host2:5432,host3:5432").
+            # SQLAlchemy's URL parser only accepts a single host:port in the
+            # authority, so pass the list via query params instead — psycopg2
+            # forwards host/port straight to libpq, which still does failover.
+            hosts, ports = [], []
+            for hostport in self.uri.split(","):
+                host, _, port = hostport.partition(":")
+                hosts.append(host)
+                ports.append(port or "5432")
+            params["host"] = ",".join(hosts)
+            params["port"] = ",".join(ports)
+            authority = ""
+
         qs = f"?{urlencode(params)}" if params else ""
-        return f"postgresql://{userinfo}{self.uri}{db}{qs}"
+        return f"postgresql://{userinfo}{authority}{db}{qs}"
 
 
 _DATASINK_VALID_KEYS = {

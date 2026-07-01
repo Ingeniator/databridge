@@ -10,6 +10,17 @@ services:
     depends_on:
       - postgres
 
+  databridge-worker:
+    build: .
+    environment:
+      DATABRIDGE_CONFIG: /app/config.yaml
+      ROLE: worker
+    volumes:
+      - ./config.yaml:/app/config.yaml:ro
+    depends_on:
+      - postgres
+      - redis
+
   postgres:
     image: postgres:16-alpine
     environment:
@@ -20,6 +31,11 @@ services:
       - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
 
 volumes:
   postgres_data:

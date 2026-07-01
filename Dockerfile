@@ -29,11 +29,12 @@ COPY alembic.ini ./
 COPY src/databridge/db/migrations/ src/databridge/db/migrations/
 COPY worker/ worker/
 COPY config.yaml.example ./config.yaml.example
-COPY entrypoint.py start.sh ./
+COPY entrypoint.py start.sh update-db.sh rollback-db.sh ./
 
 ENV PATH="/app/.venv/bin:$PATH" \
     DATABRIDGE_CONFIG="/app/config.yaml" \
-    PYTHONUNBUFFERED="1"
+    PYTHONUNBUFFERED="1" \
+    ROLE="main"
 
 EXPOSE 5010
 

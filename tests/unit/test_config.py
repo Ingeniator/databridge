@@ -134,6 +134,30 @@ def test_vault_quoted_password_with_special_chars(tmp_path, monkeypatch):
     assert unquote_plus(encoded) == password
 
 
+def test_database_multi_host_uri_is_sqlalchemy_parseable(tmp_path, monkeypatch):
+    from sqlalchemy.engine import make_url
+
+    cfg = _write_config(tmp_path, """
+        database:
+          uri: "host1:5432,host2:5432,host3:5432"
+          database: testdb
+          user: testuser
+          password: testpass
+          ssl_mode: prefer
+        encryption_key: "somekey"
+        datasources: []
+    """)
+    monkeypatch.setenv("DATABRIDGE_CONFIG", str(cfg))
+    from databridge.config import get_settings
+    s = get_settings()
+
+    url = make_url(s.database_url)
+    assert url.database == "testdb"
+    assert url.query["host"] == "host1,host2,host3"
+    assert url.query["port"] == "5432,5432,5432"
+    assert url.query["sslmode"] == "prefer"
+
+
 def test_singleton(tmp_path, monkeypatch):
     from cryptography.fernet import Fernet
     key = Fernet.generate_key().decode()
