@@ -219,12 +219,13 @@ class ClickHouseConnectionAdapter(BaseAdapter):
         sql = f"SELECT * FROM {database}.{table}{where} LIMIT {limit} FORMAT JSONEachRow"
 
         params: dict = {"query": sql}
+        headers: dict = {}
         if user:
-            params["user"] = user
-            params["password"] = password
+            headers["X-ClickHouse-User"] = user
+            headers["X-ClickHouse-Key"] = password
 
         async with httpx.AsyncClient(timeout=30.0) as client:
-            r = await client.get(self._url + "/", params=params)
+            r = await client.get(self._url + "/", params=params, headers=headers)
             r.raise_for_status()
 
         results: list[dict] = []
@@ -255,11 +256,12 @@ class ClickHouseConnectionAdapter(BaseAdapter):
         where = f" WHERE {' AND '.join(conditions)}" if conditions else ""
         sql = f"SELECT COUNT(*) FROM {database}.{table}{where} FORMAT JSONEachRow"
         params: dict = {"query": sql}
+        headers: dict = {}
         if user:
-            params["user"] = user
-            params["password"] = password
+            headers["X-ClickHouse-User"] = user
+            headers["X-ClickHouse-Key"] = password
         async with httpx.AsyncClient(timeout=30.0) as client:
-            r = await client.get(self._url + "/", params=params)
+            r = await client.get(self._url + "/", params=params, headers=headers)
             r.raise_for_status()
         for line in r.text.strip().splitlines():
             line = line.strip()
@@ -294,11 +296,12 @@ class ClickHouseConnectionAdapter(BaseAdapter):
         order_by = f" ORDER BY {ts_col}" if ts_col else ""
         sql = f"SELECT * FROM {database}.{table}{where}{order_by} LIMIT {limit} OFFSET {offset} FORMAT JSONEachRow"
         params: dict = {"query": sql}
+        headers: dict = {}
         if user:
-            params["user"] = user
-            params["password"] = password
+            headers["X-ClickHouse-User"] = user
+            headers["X-ClickHouse-Key"] = password
         async with httpx.AsyncClient(timeout=30.0) as client:
-            r = await client.get(self._url + "/", params=params)
+            r = await client.get(self._url + "/", params=params, headers=headers)
             r.raise_for_status()
         results: list[dict] = []
         for line in r.text.strip().splitlines():
