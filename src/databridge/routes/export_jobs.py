@@ -256,7 +256,11 @@ async def _s3_stream(datasink_cfg, key: str):
     client_kwargs: dict = {}
     if datasink_cfg.endpoint:
         client_kwargs["endpoint_url"] = datasink_cfg.endpoint
-        client_kwargs["config"] = Config(s3={"addressing_style": "path"})
+        client_kwargs["config"] = Config(
+            s3={"addressing_style": "path"},
+            request_checksum_calculation="when_required",
+            response_checksum_validation="when_required",
+        )
 
     session = aioboto3.Session(
         aws_access_key_id=datasink_cfg.access_key_id or None,

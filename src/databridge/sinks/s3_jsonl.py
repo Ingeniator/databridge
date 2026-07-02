@@ -36,7 +36,11 @@ class S3JsonlSink(BaseSink):
         kwargs: dict = {}
         if self._endpoint:
             kwargs["endpoint_url"] = self._endpoint
-            kwargs["config"] = Config(s3={"addressing_style": "path"})
+            kwargs["config"] = Config(
+                s3={"addressing_style": "path"},
+                request_checksum_calculation="when_required",
+                response_checksum_validation="when_required",
+            )
         return kwargs
 
     def _make_key(self, *parts: str) -> str:
