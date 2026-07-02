@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import json
 import uuid
 from contextlib import asynccontextmanager
+from typing import Any
 
 import structlog
 from fastapi import FastAPI, Request
@@ -17,6 +19,13 @@ from databridge.metrics import PrometheusMiddleware, metrics_endpoint
 from databridge.routes.health import router as health_router
 
 logger = structlog.get_logger(__name__)
+
+
+class UnicodeJSONResponse(JSONResponse):
+    """JSONResponse that emits literal UTF-8 instead of \\uXXXX escapes."""
+
+    def render(self, content: Any) -> bytes:
+        return json.dumps(content, ensure_ascii=False).encode("utf-8")
 
 
 class RequestIDMiddleware(BaseHTTPMiddleware):
@@ -70,6 +79,7 @@ def create_app() -> FastAPI:
         title="databridge",
         root_path=settings.server.root_path,
         lifespan=lifespan,
+        default_response_class=UnicodeJSONResponse,
     )
 
     # Middleware registration order (Starlette: last registered = outermost)
@@ -80,7 +90,7 @@ def create_app() -> FastAPI:
     async def unhandled_exception_handler(request: Request, exc: Exception):
         logger.error("unhandled_exception", path=request.url.path,
                      method=request.method, exc_info=True)
-        return JSONResponse(status_code=500, content={"detail": "Internal server error"})
+        return UnicodeJSONResponse(status_code=500, content={"detail": "Internal server error"})
 
     @app.exception_handler(StarletteHTTPException)
     async def http_exception_logging_handler(request: Request, exc: StarletteHTTPException):
