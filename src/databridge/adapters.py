@@ -6,6 +6,7 @@ import re
 import time
 from datetime import datetime, timezone, timedelta
 from typing import Any, Protocol
+from urllib.parse import urlsplit, urlunsplit
 
 import httpx
 import structlog
@@ -126,7 +127,13 @@ class BaseAdapter:
             url = self._conn.get("connection_url", "") or self._conn.get("url", "")
         else:
             url = getattr(self._conn, "connection_url", None) or getattr(self._conn, "url", "")
-        return (url or "").rstrip("/")
+        url = (url or "").rstrip("/")
+        # Strip embedded credentials (user:pass@host) so they never appear in
+        # request URLs, logs, or ClickHouse access logs.
+        parts = urlsplit(url)
+        if parts.username or parts.password:
+            url = urlunsplit(parts._replace(netloc=parts.hostname + (f":{parts.port}" if parts.port else "")))
+        return url
 
     def _creds_dict(self) -> dict:
         # For system sources conn is a dataclass — use its fields as base so
