@@ -97,6 +97,24 @@ def test_preview_sink_returns_400(sink_client):
     assert "source" in r.json()["detail"].lower()
 
 
+def test_preview_returns_literal_utf8_not_escaped(source_client):
+    """Response body must contain literal UTF-8, not \\uXXXX escapes (regression test)."""
+    c, conn_id = source_client
+    with respx.mock:
+        respx.get("http://ch:8123/").mock(
+            return_value=httpx.Response(200, text='{"id":"1","msg":"привет мир"}\n')
+        )
+        r = c.post(
+            f"/api/v1/connections/{conn_id}/preview",
+            json={"query": "hello", "limit": 10},
+            headers={"X-Group-ID": "u1"},
+        )
+    assert r.status_code == 200, r.text
+    assert b"\\u0430" not in r.content
+    assert "привет мир".encode("utf-8") in r.content
+    assert r.json()["results"][0]["msg"] == "привет мир"
+
+
 def test_preview_backend_error_returns_502(source_client):
     c, conn_id = source_client
     with respx.mock:
