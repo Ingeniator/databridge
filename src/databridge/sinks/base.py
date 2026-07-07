@@ -10,6 +10,16 @@ class BaseSink(ABC):
         self._config = config
         self.external_id: str | None = None
 
+    def set_actor(self, org_id: str, user_id: str) -> None:
+        """Bind this sink instance to the export job's owning identity.
+
+        Called by the worker right after construction, before any other
+        method. Sinks that must assert user context to a downstream service
+        (e.g. via Keycloak token exchange) override this; sinks with no such
+        concept keep the no-op default.
+        """
+        pass
+
     @abstractmethod
     async def ping(self) -> None: ...
 

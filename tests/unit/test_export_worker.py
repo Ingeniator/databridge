@@ -43,6 +43,7 @@ def _job_row(**kw) -> dict:
     row = {
         "id": uuid.UUID(_JOB_ID),
         "org_id": _ORG_ID,
+        "user_id": "user-1",
         "status": "pending",
         "datasink_name": "mock-sink",
         "datasource_type": "system",

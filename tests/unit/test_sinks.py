@@ -18,6 +18,30 @@ def _annotator_cfg(url="http://ann:8010"):
     return DatasinkConfig(name="ann", type="annotator-mock", url=url)
 
 
+def _tagme_cfg(url="http://tagme:9000"):
+    return DatasinkConfig(
+        name="tagme",
+        type="tagme-dataset",
+        url=url,
+        token_url=f"{url}/auth/realms/tagme-public/protocol/openid-connect/token",
+        client_id="databridge-service",
+        client_secret="s3cr3t",
+        audience="tagme",
+    )
+
+
+def _tagme_annotator_cfg(url="http://tagme:9000"):
+    return DatasinkConfig(
+        name="tagme-annotator",
+        type="tagme-annotator",
+        url=url,
+        token_url=f"{url}/auth/realms/tagme-public/protocol/openid-connect/token",
+        client_id="databridge-service",
+        client_secret="s3cr3t",
+        audience="tagme",
+    )
+
+
 def _local_zip_cfg(tmp_path, template=""):
     return DatasinkConfig(name="zp", type="local-zip", path=str(tmp_path), filename_template=template)
 
@@ -183,3 +207,218 @@ async def test_get_sink_raises_for_unknown_type():
     cfg = DatasinkConfig(name="x", type="unknown-type", url="http://x")
     with pytest.raises(ValueError, match="Unknown datasink type"):
         get_sink(cfg)
+
+
+# ── TagmeDatasetSink: Keycloak token exchange ───────────────────────────────────────
+
+def _tagme_token_handler(subject_token="svc-token", expires_in=300, expect_org=None, expect_user=None):
+    """Build a respx side_effect that fakes a Keycloak token endpoint serving
+    both the client_credentials grant (service token) and the token-exchange
+    grant (service token -> user-asserting token), so tests can assert the
+    exchange request carries the right actor claims without a real Keycloak.
+    """
+    from urllib.parse import parse_qsl
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = dict(parse_qsl(request.content.decode()))
+        if body["grant_type"] == "client_credentials":
+            assert body["client_id"] == "databridge-service"
+            assert body["client_secret"] == "s3cr3t"
+            return httpx.Response(200, json={"access_token": subject_token, "expires_in": 60})
+        assert body["grant_type"] == "urn:ietf:params:oauth:grant-type:token-exchange"
+        assert body["subject_token"] == subject_token
+        assert body["subject_token_type"] == "urn:ietf:params:oauth:token-type:access_token"
+        assert body["audience"] == "tagme"
+        if expect_user is not None:
+            assert body["requested_subject"] == expect_user
+        if expect_org is not None:
+            assert request.headers.get("Organization-Id") == expect_org
+        return httpx.Response(200, json={"access_token": "exchanged-token", "expires_in": expires_in})
+
+    return handler
+
+
+@pytest.mark.asyncio
+async def test_tagme_requires_set_actor_before_use():
+    from databridge.sinks.tagme import TagmeDatasetSink
+    sink = TagmeDatasetSink(_tagme_cfg())
+    with pytest.raises(RuntimeError, match="set_actor"):
+        await sink.list_datasets()
+
+
+@pytest.mark.asyncio
+async def test_tagme_token_exchange_carries_actor_claims():
+    from databridge.sinks.tagme import TagmeDatasetSink
+    cfg = _tagme_cfg()
+    with respx.mock:
+        respx.post(cfg.token_url).mock(
+            side_effect=_tagme_token_handler(expect_org="org-1", expect_user="user-1")
+        )
+        respx.get(f"{cfg.url}/api/v0/datasets").mock(
+            return_value=httpx.Response(200, json={"items": [], "has_next": False})
+        )
+        sink = TagmeDatasetSink(cfg)
+        sink.set_actor("org-1", "user-1")
+        result = await sink.list_datasets()
+    assert result == []
+
+
+@pytest.mark.asyncio
+async def test_tagme_create_dataset_reuses_existing_by_name():
+    from databridge.sinks.tagme import TagmeDatasetSink
+    cfg = _tagme_cfg()
+    ds_id = "aaaaaaaa-0000-0000-0000-000000000001"
+    with respx.mock:
+        respx.post(cfg.token_url).mock(side_effect=_tagme_token_handler())
+        respx.get(f"{cfg.url}/api/v0/datasets").mock(
+            return_value=httpx.Response(200, json={"items": [{"id": ds_id, "name": "myds"}], "has_next": False})
+        )
+        create_route = respx.post(f"{cfg.url}/api/v0/datasets")
+        sink = TagmeDatasetSink(cfg)
+        sink.set_actor("org-1", "user-1")
+        await sink.create_dataset("myds")
+    assert sink.external_id == ds_id
+    assert not create_route.called
+
+
+@pytest.mark.asyncio
+async def test_tagme_create_dataset_posts_when_absent():
+    from databridge.sinks.tagme import TagmeDatasetSink
+    cfg = _tagme_cfg()
+    ds_id = "aaaaaaaa-0000-0000-0000-000000000002"
+    with respx.mock:
+        respx.post(cfg.token_url).mock(side_effect=_tagme_token_handler())
+        respx.get(f"{cfg.url}/api/v0/datasets").mock(
+            return_value=httpx.Response(200, json={"items": [], "has_next": False})
+        )
+        create_route = respx.post(f"{cfg.url}/api/v0/datasets").mock(
+            return_value=httpx.Response(201, json={"id": ds_id, "name": "myds", "access": "organization"})
+        )
+        sink = TagmeDatasetSink(cfg)
+        sink.set_actor("org-1", "user-1")
+        await sink.create_dataset("myds")
+    assert sink.external_id == ds_id
+    assert create_route.called
+    sent = json.loads(create_route.calls.last.request.content)
+    assert sent == {"name": "myds", "access": "organization"}
+
+
+@pytest.mark.asyncio
+async def test_tagme_post_file_uploads_multipart():
+    from databridge.sinks.tagme import TagmeDatasetSink
+    cfg = _tagme_cfg()
+    ds_id = "aaaaaaaa-0000-0000-0000-000000000003"
+    with respx.mock:
+        respx.post(cfg.token_url).mock(side_effect=_tagme_token_handler())
+        respx.get(f"{cfg.url}/api/v0/datasets").mock(
+            return_value=httpx.Response(200, json={"items": [{"id": ds_id, "name": "myds"}], "has_next": False})
+        )
+        respx.post(f"{cfg.url}/api/v0/datasets/{ds_id}/files").mock(
+            return_value=httpx.Response(200, json={"created_files": [{"uid": "fid", "filename": "file.json"}], "errors": []})
+        )
+        sink = TagmeDatasetSink(cfg)
+        sink.set_actor("org-1", "user-1")
+        ref = await sink.post_file("myds", {"key": "val", "source_url": "http://x/f"}, "file.json")
+    assert ref == "http://x/f"
+
+
+@pytest.mark.asyncio
+async def test_tagme_reexchanges_token_when_actor_changes():
+    """A cached token for one user must not leak to a sink reused for another."""
+    from databridge.sinks.tagme import TagmeDatasetSink
+    cfg = _tagme_cfg()
+    with respx.mock:
+        route = respx.post(cfg.token_url).mock(side_effect=_tagme_token_handler())
+        respx.get(f"{cfg.url}/api/v0/datasets").mock(
+            return_value=httpx.Response(200, json={"items": [], "has_next": False})
+        )
+        sink = TagmeDatasetSink(cfg)
+        sink.set_actor("org-1", "user-1")
+        await sink.list_datasets()
+        calls_after_first = route.call_count
+        sink.set_actor("org-2", "user-2")
+        await sink.list_datasets()
+    # each actor switch re-runs client_credentials + token-exchange (2 calls)
+    assert route.call_count == calls_after_first + 2
+
+
+# ── TagmeAnnotatorSink: upload into one task in an existing project ─────────
+
+@pytest.mark.asyncio
+async def test_tagme_annotator_create_dataset_rejects_unknown_project():
+    from databridge.sinks.tagme import TagmeAnnotatorSink
+    cfg = _tagme_annotator_cfg()
+    with respx.mock:
+        respx.post(cfg.token_url).mock(side_effect=_tagme_token_handler())
+        respx.get(f"{cfg.url}/api/v0/markup_project").mock(
+            return_value=httpx.Response(200, json={"items": [], "has_next": False})
+        )
+        sink = TagmeAnnotatorSink(cfg)
+        sink.set_actor("org-1", "user-1")
+        with pytest.raises(RuntimeError, match="not found"):
+            await sink.create_dataset("no-such-project")
+
+
+@pytest.mark.asyncio
+async def test_tagme_annotator_opens_task_in_existing_project_by_name():
+    from databridge.sinks.tagme import TagmeAnnotatorSink
+    cfg = _tagme_annotator_cfg()
+    project_id = "pppppppp-0000-0000-0000-000000000001"
+    task_id = "tttttttt-0000-0000-0000-000000000001"
+    with respx.mock:
+        respx.post(cfg.token_url).mock(side_effect=_tagme_token_handler())
+        respx.get(f"{cfg.url}/api/v0/markup_project").mock(
+            return_value=httpx.Response(200, json={"items": [{"uid": project_id, "name": "proj1"}], "has_next": False})
+        )
+        create_task_route = respx.post(f"{cfg.url}/api/v0/tasks").mock(
+            return_value=httpx.Response(201, json={"uid": task_id})
+        )
+        sink = TagmeAnnotatorSink(cfg)
+        sink.set_actor("org-1", "user-1")
+        await sink.create_dataset("proj1")
+    assert sink.external_id == task_id
+    sent = json.loads(create_task_route.calls.last.request.content)
+    assert sent == {"project_id": project_id}
+
+
+@pytest.mark.asyncio
+async def test_tagme_annotator_post_file_requires_create_dataset_first():
+    from databridge.sinks.tagme import TagmeAnnotatorSink
+    sink = TagmeAnnotatorSink(_tagme_annotator_cfg())
+    with pytest.raises(RuntimeError, match="create_dataset"):
+        await sink.post_file("proj1", {"x": 1})
+
+
+@pytest.mark.asyncio
+async def test_tagme_annotator_full_flow_buffers_then_writes_payload_once():
+    from databridge.sinks.tagme import TagmeAnnotatorSink
+    cfg = _tagme_annotator_cfg()
+    project_id = "pppppppp-0000-0000-0000-000000000002"
+    task_id = "tttttttt-0000-0000-0000-000000000002"
+    with respx.mock:
+        respx.post(cfg.token_url).mock(side_effect=_tagme_token_handler())
+        respx.get(f"{cfg.url}/api/v0/markup_project").mock(
+            return_value=httpx.Response(200, json={"items": [{"uid": project_id, "name": "proj1"}], "has_next": False})
+        )
+        respx.post(f"{cfg.url}/api/v0/tasks").mock(
+            return_value=httpx.Response(201, json={"uid": task_id})
+        )
+        payload_route = respx.put(f"{cfg.url}/api/v0/tasks/{task_id}/payload").mock(
+            return_value=httpx.Response(200, json={"payload": {}})
+        )
+        start_route = respx.post(f"{cfg.url}/api/v0/tasks/{task_id}/start").mock(
+            return_value=httpx.Response(200, json={"uid": task_id})
+        )
+        sink = TagmeAnnotatorSink(cfg)
+        sink.set_actor("org-1", "user-1")
+        await sink.create_dataset("proj1")
+        ref1 = await sink.post_file("proj1", {"id": 1, "source_url": "http://x/1"})
+        ref2 = await sink.post_file("proj1", {"id": 2, "source_url": "http://x/2"})
+        assert not payload_route.called  # buffered, not written per-record
+        await sink.finalise()
+    assert ref1 == "http://x/1"
+    assert ref2 == "http://x/2"
+    assert payload_route.called
+    sent = json.loads(payload_route.calls.last.request.content)
+    assert sent == {"payload": {"entities": [{"id": 1, "source_url": "http://x/1"}, {"id": 2, "source_url": "http://x/2"}]}}
+    assert start_route.called

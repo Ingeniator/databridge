@@ -48,6 +48,7 @@ async def run_export_job(ctx: dict, job_id: str) -> None:
         return
 
     org_id = job_resp["org_id"]
+    user_id = job_resp["user_id"]
     datasink_name = job_resp["datasink_name"]
 
     # Find datasink config
@@ -115,6 +116,7 @@ async def run_export_job(ctx: dict, job_id: str) -> None:
         from databridge.sinks import get_sink
         sink = get_sink(datasink_config)
         sink._job_id = job_id          # stamp so filename includes job ID
+        sink.set_actor(org_id, user_id)
         await sink.ping()
         destination_dataset = job_resp["destination_dataset"]
         await sink.create_dataset(destination_dataset)
@@ -140,6 +142,7 @@ async def run_export_job(ctx: dict, job_id: str) -> None:
                 if asset_cfg:
                     asset_sink = get_sink(asset_cfg)
                     asset_sink._job_id = job_id
+                    asset_sink.set_actor(org_id, user_id)
                     await asset_sink.ping()
                     await asset_sink.create_dataset(asset_dataset)
                     ext_asset_id = getattr(asset_sink, "_dataset_ids", {}).get(asset_dataset)

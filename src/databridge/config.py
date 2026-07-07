@@ -108,11 +108,15 @@ class DatabaseConfig:
 _DATASINK_VALID_KEYS = {
     "name", "type", "url", "path", "filename_template",
     "bucket", "region", "access_key_id", "secret_access_key", "endpoint", "key_prefix",
+    "token_url", "client_id", "client_secret", "audience", "org_header", "dataset_access",
 }
 _DATASINK_SERVICE_TYPES = {"dataset-mock", "annotator-mock"}
+_DATASINK_TOKEN_EXCHANGE_TYPES = {"tagme-dataset", "tagme-annotator"}
 _DATASINK_LOCAL_TYPES = {"local-zip", "local-jsonl"}
 _DATASINK_S3_TYPES = {"s3-jsonl", "s3-zip"}
-_DATASINK_ALL_TYPES = _DATASINK_SERVICE_TYPES | _DATASINK_LOCAL_TYPES | _DATASINK_S3_TYPES
+_DATASINK_ALL_TYPES = (
+    _DATASINK_SERVICE_TYPES | _DATASINK_TOKEN_EXCHANGE_TYPES | _DATASINK_LOCAL_TYPES | _DATASINK_S3_TYPES
+)
 
 
 @dataclass(frozen=True)
@@ -128,6 +132,15 @@ class DatasinkConfig:
     secret_access_key: str = ""
     endpoint: str = ""
     key_prefix: str = ""
+    # Keycloak token-exchange auth (type: tagme) — the worker's own service
+    # account exchanges its token for one asserting the export job's owning
+    # user, so no browser-derived token ever needs to survive the job.
+    token_url: str = ""
+    client_id: str = ""
+    client_secret: str = ""
+    audience: str = ""
+    org_header: str = "Organization-Id"
+    dataset_access: str = "organization"
 
 
 @dataclass(frozen=True)
@@ -289,6 +302,12 @@ def get_settings() -> Settings:
             )
         if sk_type in _DATASINK_SERVICE_TYPES and not sk.get("url"):
             raise ValueError(f"datasink '{sk_name}': 'url' is required for type {sk_type!r}")
+        if sk_type in _DATASINK_TOKEN_EXCHANGE_TYPES:
+            missing = [k for k in ("url", "token_url", "client_id", "client_secret") if not sk.get(k)]
+            if missing:
+                raise ValueError(
+                    f"datasink '{sk_name}': {sorted(missing)} required for type {sk_type!r}"
+                )
         if sk_type in _DATASINK_LOCAL_TYPES and not sk.get("path"):
             raise ValueError(f"datasink '{sk_name}': 'path' is required for type {sk_type!r}")
         if sk_type in _DATASINK_S3_TYPES and not sk.get("bucket"):

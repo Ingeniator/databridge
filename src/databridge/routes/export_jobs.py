@@ -328,7 +328,10 @@ async def download_export(
             headers={"Content-Disposition": f'attachment; filename="{filename}"'},
         )
 
-    raise HTTPException(status_code=400, detail="download not available for this sink type")
+    raise HTTPException(
+        status_code=400,
+        detail="download not available for this sink type; only local-zip, local-jsonl, and s3 sinks support direct download",
+    )
 
 
 class _WebhookTestRequest(BaseModel):

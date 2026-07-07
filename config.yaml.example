@@ -86,6 +86,30 @@ datasinks: []
   # - name: "annotator-mock"
   #   type: annotator-mock
   #   url: "http://annotator-mock:8010"
+  #
+  # ── Tagme datasets (real API, Keycloak token exchange) ──────────────────────
+  # - name: "tagme-dataset"
+  #   type: tagme-dataset
+  #   url: "https://tagme.sberdevices.ru"
+  #   token_url: "https://tagme.sberdevices.ru/auth/realms/tagme-public/protocol/openid-connect/token"
+  #   client_id: "databridge-service"      # confidential client, service account + token-exchange enabled
+  #   client_secret: "vault:tagme_client_secret"
+  #   audience: "tagme"                    # target client id requested for the exchanged token
+  #   org_header: "Organization-Id"        # header carrying org_id on the exchange call
+  #   dataset_access: "organization"       # public | organization | task | private
+  #
+  # ── Tagme annotation (uploads into one task in an existing project) ────────
+  # - name: "tagme-annotator"
+  #   type: tagme-annotator
+  #   url: "https://tagme.sberdevices.ru"
+  #   token_url: "https://tagme.sberdevices.ru/auth/realms/tagme-public/protocol/openid-connect/token"
+  #   client_id: "databridge-service"
+  #   client_secret: "vault:tagme_client_secret"
+  #   audience: "tagme"
+  #   org_header: "Organization-Id"
+  #   # destination_dataset on the export job must be an existing project's
+  #   # uid or exact name — this sink does not create projects, pools, or
+  #   # task config; it opens one task per export job in that project.
 
 # export:
 #   webhook_allowed_url_prefixes:   # restrict which hosts users may send test webhooks to
