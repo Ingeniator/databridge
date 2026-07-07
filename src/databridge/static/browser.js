@@ -14,6 +14,7 @@
   let _previewRows = [];
   let _previewLimit = 50;
   let _totalCount = 0;
+  let _previewLoading = false;
   let _maskingRules = [];  // [{ field_path, action }]
   let _samplingConfig = null;  // { method, target_column, ratio_or_size }
   const _DEFAULT_WEBHOOK_TEMPLATE = `{
@@ -567,11 +568,33 @@
   }
 
   // ── Load preview ───────────────────────────────────────────────────────────
+  const _PREVIEW_FILTER_CONTROL_IDS = [
+    'predicate-filter-input', 'filter-advanced-btn', 'time-range-select',
+    'custom-start-input', 'custom-end-input', 'limit-input', 'load-more-btn',
+  ];
+
+  function setPreviewLoading(loading) {
+    _previewLoading = loading;
+    const indicator = document.getElementById('preview-loading-indicator');
+    if (indicator) indicator.classList.toggle('hidden', !loading);
+    const tableWrap = document.getElementById('preview-table-wrap');
+    if (tableWrap) tableWrap.classList.toggle('opacity-50', loading);
+    for (const id of _PREVIEW_FILTER_CONTROL_IDS) {
+      const el = document.getElementById(id);
+      if (el) el.disabled = loading;
+    }
+    // time-range-select's enabled state depends on whether a time field is set,
+    // not just on loading — recompute it rather than force-enabling above.
+    if (!loading) enableTimeRangeSelect(!!_filterState.time_field);
+  }
+
   async function loadPreview() {
     if (!_activeId) return;
+    if (_previewLoading) return; // a request is already in flight — ignore until it resolves
     const { valid } = validatePredicate(_filterState.query);
     if (!valid) return;
 
+    setPreviewLoading(true);
     try {
       const body = {
         query: _filterState.query,
@@ -602,6 +625,8 @@
         _totalCount > 0 ? `TOTAL: ${_totalCount.toLocaleString()} ROWS` : 'TOTAL: —';
     } catch (e) {
       showError('Preview failed: ' + e.message);
+    } finally {
+      setPreviewLoading(false);
     }
     updateClearAllVisibility();
   }

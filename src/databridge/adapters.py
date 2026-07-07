@@ -1,17 +1,24 @@
 from __future__ import annotations
 
 import asyncio
+import glob as _glob
 import json
+import os
 import re
 import time
 from datetime import datetime, timezone, timedelta
 from typing import Any, Protocol
 from urllib.parse import urlsplit, urlunsplit
 
+import duckdb_extension_httpfs
 import httpx
 import structlog
 
 logger = structlog.get_logger(__name__)
+
+# Pre-locate the httpfs extension binary from the pip package and LOAD it
+# directly by path, so no INSTALL step (and no write to ~/.duckdb) is needed.
+_HTTPFS_EXT = _glob.glob(str(duckdb_extension_httpfs.__path__[0]) + "/**/httpfs.duckdb_extension", recursive=True)[0]
 
 _OP_MAP = {"==": "=", "!=": "!=", ">=": ">=", "<=": "<=", ">": ">", "<": "<"}
 _RULE_RE = re.compile(r"(\w+)\s*(==|!=|>=|<=|>|<|contains)\s*'((?:[^'\\]|\\.)*)'", re.IGNORECASE)
@@ -564,6 +571,18 @@ class DatasetSinkConnectionAdapter(BaseAdapter):
 # ── S3 ────────────────────────────────────────────────────────────────────────
 
 class S3ConnectionAdapter(BaseAdapter):
+    # (file extension, DuckDB reader function, extra reader options)
+    # ignore_errors tolerates rows/files whose JSON/CSV shape doesn't match
+    # the schema DuckDB inferred from its sample (common with independently
+    # produced export files), so a single malformed record doesn't blow up
+    # the whole scan once a WHERE clause forces DuckDB past LIMIT pushdown.
+    _READERS = (
+        ("parquet", "read_parquet", ""),
+        ("jsonl", "read_json_auto", ", ignore_errors=true"),
+        ("json", "read_json_auto", ", ignore_errors=true"),
+        ("csv", "read_csv_auto", ", ignore_errors=true"),
+    )
+
     async def ping(self) -> None:
         import aioboto3
         creds = self._creds_dict()
@@ -587,11 +606,11 @@ class S3ConnectionAdapter(BaseAdapter):
 
     def _duckdb_con(self, creds: dict):
         import duckdb
-        con = duckdb.connect()
         temp_dir = creds.get("duckdb_temp_dir", "") or "/tmp/duckdb_temp"
-        con.execute(f"SET temp_directory='{temp_dir}';")
+        os.makedirs(temp_dir, exist_ok=True)
+        con = duckdb.connect(":memory:", config={"temp_directory": temp_dir})
         try:
-            con.execute("INSTALL httpfs; LOAD httpfs;")
+            con.execute(f"LOAD '{_HTTPFS_EXT}';")
         except Exception:
             pass
         access_key = creds.get("access_key_id", "")
@@ -611,23 +630,29 @@ class S3ConnectionAdapter(BaseAdapter):
             con.execute("SET s3_url_style='path';")
         return con
 
+    @staticmethod
+    def _time_where(creds: dict, start: datetime | None, end: datetime | None) -> str:
+        ts_col = creds.get("timestamp_column", "timestamp")
+        conditions: list[str] = []
+        if ts_col and start:
+            conditions.append(f"{ts_col} >= TIMESTAMP '{start.isoformat(sep=' ')}'")
+        if ts_col and end:
+            conditions.append(f"{ts_col} < TIMESTAMP '{end.isoformat(sep=' ')}'")
+        return f" WHERE {' AND '.join(conditions)}" if conditions else ""
+
     async def preview(self, query: str, start: datetime | None, end: datetime | None, limit: int) -> list[dict]:
         creds = self._creds_dict()
         bucket = creds.get("bucket", "") or getattr(self._conn, "bucket", "")
         key_prefix = creds.get("key_prefix", "") or getattr(self._conn, "key_prefix", "")
+        where = self._time_where(creds, start, end)
 
         def _scan() -> list[dict]:
             con = self._duckdb_con(creds)
             prefix = key_prefix.rstrip("/") + "/" if key_prefix else ""
-            for fmt, reader in (
-                ("parquet", "read_parquet"),
-                ("jsonl", "read_json_auto"),
-                ("json", "read_json_auto"),
-                ("csv", "read_csv_auto"),
-            ):
+            for fmt, reader, opts in self._READERS:
                 path = f"s3://{bucket}/{prefix}**/*.{fmt}"
                 try:
-                    rows = con.execute(f"SELECT * FROM {reader}('{path}') LIMIT {limit}").fetchall()
+                    rows = con.execute(f"SELECT * FROM {reader}('{path}'{opts}){where} LIMIT {limit}").fetchall()
                     cols = [d[0] for d in (con.description or [])]
                     return [dict(zip(cols, row)) for row in rows]
                 except Exception:
@@ -640,19 +665,15 @@ class S3ConnectionAdapter(BaseAdapter):
         creds = self._creds_dict()
         bucket = creds.get("bucket", "") or getattr(self._conn, "bucket", "")
         key_prefix = creds.get("key_prefix", "") or getattr(self._conn, "key_prefix", "")
+        where = self._time_where(creds, start, end)
 
         def _count() -> int:
             con = self._duckdb_con(creds)
             prefix = key_prefix.rstrip("/") + "/" if key_prefix else ""
-            for fmt, reader in (
-                ("parquet", "read_parquet"),
-                ("jsonl", "read_json_auto"),
-                ("json", "read_json_auto"),
-                ("csv", "read_csv_auto"),
-            ):
+            for fmt, reader, opts in self._READERS:
                 path = f"s3://{bucket}/{prefix}**/*.{fmt}"
                 try:
-                    row = con.execute(f"SELECT COUNT(*) FROM {reader}('{path}')").fetchone()
+                    row = con.execute(f"SELECT COUNT(*) FROM {reader}('{path}'{opts}){where}").fetchone()
                     return int(row[0]) if row else 0
                 except Exception:
                     continue
@@ -671,20 +692,18 @@ class S3ConnectionAdapter(BaseAdapter):
         creds = self._creds_dict()
         bucket = creds.get("bucket", "") or getattr(self._conn, "bucket", "")
         key_prefix = creds.get("key_prefix", "") or getattr(self._conn, "key_prefix", "")
+        where = self._time_where(creds, start, end)
+        ts_col = creds.get("timestamp_column", "timestamp")
+        order_by = f" ORDER BY {ts_col}" if ts_col else ""
 
         def _scan() -> list[dict]:
             con = self._duckdb_con(creds)
             prefix = key_prefix.rstrip("/") + "/" if key_prefix else ""
-            for fmt, reader in (
-                ("parquet", "read_parquet"),
-                ("jsonl", "read_json_auto"),
-                ("json", "read_json_auto"),
-                ("csv", "read_csv_auto"),
-            ):
+            for fmt, reader, opts in self._READERS:
                 path = f"s3://{bucket}/{prefix}**/*.{fmt}"
                 try:
                     rows = con.execute(
-                        f"SELECT * FROM {reader}('{path}') LIMIT {limit} OFFSET {offset}"
+                        f"SELECT * FROM {reader}('{path}'{opts}){where}{order_by} LIMIT {limit} OFFSET {offset}"
                     ).fetchall()
                     cols = [d[0] for d in (con.description or [])]
                     return [dict(zip(cols, row)) for row in rows]
