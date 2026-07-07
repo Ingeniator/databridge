@@ -652,6 +652,16 @@
     return _cellPopover;
   }
 
+  function _prettyPrintIfJson(text) {
+    const trimmed = text.trim();
+    if (trimmed[0] !== '{' && trimmed[0] !== '[') return text;
+    try {
+      return JSON.stringify(JSON.parse(trimmed), null, 2);
+    } catch {
+      return text;
+    }
+  }
+
   function _showCellPopover(td) {
     const text = td.dataset.full ?? '';
     const pop = _ensureCellPopover();
@@ -663,7 +673,7 @@
           <span class="material-symbols-outlined text-[16px]">close</span>
         </button>
       </div>
-      <pre class="text-xs font-mono text-on-surface whitespace-pre-wrap break-all select-all">${esc(text)}</pre>`;
+      <pre class="text-xs font-mono text-on-surface whitespace-pre-wrap break-all select-all">${esc(_prettyPrintIfJson(text))}</pre>`;
 
     pop.classList.remove('hidden');
 
