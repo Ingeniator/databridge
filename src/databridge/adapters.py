@@ -58,6 +58,7 @@ def _query_to_sql(expr: str, search_column: str) -> str | None:
     return result
 
 _PING_TIMEOUT = 5.0
+_SCAN_TIMEOUT = 25.0
 
 
 class ConnectionAdapter(Protocol):
@@ -583,26 +584,52 @@ class S3ConnectionAdapter(BaseAdapter):
         ("csv", "read_csv_auto", ", ignore_errors=true"),
     )
 
+    def _s3_client_kwargs(self, creds: dict) -> dict:
+        endpoint = getattr(self._conn, "endpoint", "") or getattr(self._conn, "connection_url", "") or creds.get("endpoint", "")
+        region = creds.get("region", None) or getattr(self._conn, "region", "us-east-1")
+        kwargs: dict = {
+            "region_name": region,
+            "aws_access_key_id": creds.get("access_key_id", ""),
+            "aws_secret_access_key": creds.get("secret_access_key", ""),
+        }
+        if endpoint:
+            kwargs["endpoint_url"] = endpoint
+        return kwargs
+
     async def ping(self) -> None:
         import aioboto3
         creds = self._creds_dict()
         bucket = creds.get("bucket", "") or getattr(self._conn, "bucket", "")
-        endpoint = getattr(self._conn, "endpoint", "") or getattr(self._conn, "connection_url", "") or creds.get("endpoint", "")
-        region = creds.get("region", None) or getattr(self._conn, "region", "us-east-1")
 
         async def _head():
             session = aioboto3.Session()
-            kwargs: dict = {
-                "region_name": region,
-                "aws_access_key_id": creds.get("access_key_id", ""),
-                "aws_secret_access_key": creds.get("secret_access_key", ""),
-            }
-            if endpoint:
-                kwargs["endpoint_url"] = endpoint
-            async with session.client("s3", **kwargs) as s3:
+            async with session.client("s3", **self._s3_client_kwargs(creds)) as s3:
                 await s3.head_bucket(Bucket=bucket)
 
         await asyncio.wait_for(_head(), timeout=_PING_TIMEOUT)
+
+    async def _ordered_readers(self, creds: dict, bucket: str, prefix: str) -> list[tuple[str, str, str]]:
+        """Peek at a few keys to guess the format, so the DuckDB scan only has to
+        try the right reader instead of resolving an expensive recursive glob
+        (``**/*.ext``) up to once per candidate format against a large bucket."""
+        import aioboto3
+        try:
+            async def _list():
+                session = aioboto3.Session()
+                async with session.client("s3", **self._s3_client_kwargs(creds)) as s3:
+                    return await s3.list_objects_v2(Bucket=bucket, Prefix=prefix, MaxKeys=50)
+
+            resp = await asyncio.wait_for(_list(), timeout=_PING_TIMEOUT)
+        except Exception as exc:
+            logger.debug("s3_format_detect_failed", bucket=bucket, prefix=prefix, error=str(exc))
+            return list(self._READERS)
+
+        keys = [obj["Key"].lower() for obj in resp.get("Contents", [])]
+        for fmt, reader, opts in self._READERS:
+            if any(key.endswith(f".{fmt}") for key in keys):
+                rest = [r for r in self._READERS if r[0] != fmt]
+                return [(fmt, reader, opts), *rest]
+        return list(self._READERS)
 
     def _duckdb_con(self, creds: dict):
         import duckdb
@@ -645,41 +672,51 @@ class S3ConnectionAdapter(BaseAdapter):
         bucket = creds.get("bucket", "") or getattr(self._conn, "bucket", "")
         key_prefix = creds.get("key_prefix", "") or getattr(self._conn, "key_prefix", "")
         where = self._time_where(creds, start, end)
+        prefix = key_prefix.rstrip("/") + "/" if key_prefix else ""
+        readers = await self._ordered_readers(creds, bucket, prefix)
 
         def _scan() -> list[dict]:
             con = self._duckdb_con(creds)
-            prefix = key_prefix.rstrip("/") + "/" if key_prefix else ""
-            for fmt, reader, opts in self._READERS:
+            for fmt, reader, opts in readers:
                 path = f"s3://{bucket}/{prefix}**/*.{fmt}"
                 try:
                     rows = con.execute(f"SELECT * FROM {reader}('{path}'{opts}){where} LIMIT {limit}").fetchall()
                     cols = [d[0] for d in (con.description or [])]
                     return [dict(zip(cols, row)) for row in rows]
-                except Exception:
+                except Exception as exc:
+                    logger.debug("s3_reader_failed", bucket=bucket, fmt=fmt, error=str(exc))
                     continue
             return []
 
-        return await asyncio.to_thread(_scan)
+        try:
+            return await asyncio.wait_for(asyncio.to_thread(_scan), timeout=_SCAN_TIMEOUT)
+        except asyncio.TimeoutError:
+            raise TimeoutError(f"S3 scan of bucket '{bucket}' timed out after {_SCAN_TIMEOUT:.0f}s")
 
     async def count(self, query: str, start: datetime | None, end: datetime | None) -> int:
         creds = self._creds_dict()
         bucket = creds.get("bucket", "") or getattr(self._conn, "bucket", "")
         key_prefix = creds.get("key_prefix", "") or getattr(self._conn, "key_prefix", "")
         where = self._time_where(creds, start, end)
+        prefix = key_prefix.rstrip("/") + "/" if key_prefix else ""
+        readers = await self._ordered_readers(creds, bucket, prefix)
 
         def _count() -> int:
             con = self._duckdb_con(creds)
-            prefix = key_prefix.rstrip("/") + "/" if key_prefix else ""
-            for fmt, reader, opts in self._READERS:
+            for fmt, reader, opts in readers:
                 path = f"s3://{bucket}/{prefix}**/*.{fmt}"
                 try:
                     row = con.execute(f"SELECT COUNT(*) FROM {reader}('{path}'{opts}){where}").fetchone()
                     return int(row[0]) if row else 0
-                except Exception:
+                except Exception as exc:
+                    logger.debug("s3_reader_failed", bucket=bucket, fmt=fmt, error=str(exc))
                     continue
             return 0
 
-        return await asyncio.to_thread(_count)
+        try:
+            return await asyncio.wait_for(asyncio.to_thread(_count), timeout=_SCAN_TIMEOUT)
+        except asyncio.TimeoutError:
+            raise TimeoutError(f"S3 scan of bucket '{bucket}' timed out after {_SCAN_TIMEOUT:.0f}s")
 
     async def fetch_page(
         self,
@@ -695,11 +732,12 @@ class S3ConnectionAdapter(BaseAdapter):
         where = self._time_where(creds, start, end)
         ts_col = creds.get("timestamp_column", "timestamp")
         order_by = f" ORDER BY {ts_col}" if ts_col else ""
+        prefix = key_prefix.rstrip("/") + "/" if key_prefix else ""
+        readers = await self._ordered_readers(creds, bucket, prefix)
 
         def _scan() -> list[dict]:
             con = self._duckdb_con(creds)
-            prefix = key_prefix.rstrip("/") + "/" if key_prefix else ""
-            for fmt, reader, opts in self._READERS:
+            for fmt, reader, opts in readers:
                 path = f"s3://{bucket}/{prefix}**/*.{fmt}"
                 try:
                     rows = con.execute(
@@ -707,11 +745,15 @@ class S3ConnectionAdapter(BaseAdapter):
                     ).fetchall()
                     cols = [d[0] for d in (con.description or [])]
                     return [dict(zip(cols, row)) for row in rows]
-                except Exception:
+                except Exception as exc:
+                    logger.debug("s3_reader_failed", bucket=bucket, fmt=fmt, error=str(exc))
                     continue
             return []
 
-        return await asyncio.to_thread(_scan)
+        try:
+            return await asyncio.wait_for(asyncio.to_thread(_scan), timeout=_SCAN_TIMEOUT)
+        except asyncio.TimeoutError:
+            raise TimeoutError(f"S3 scan of bucket '{bucket}' timed out after {_SCAN_TIMEOUT:.0f}s")
 
     async def schema(self, start: datetime | None, end: datetime | None) -> tuple[dict[str, dict], int]:
         records = await self.preview("", start, end, limit=20)
