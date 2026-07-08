@@ -59,6 +59,9 @@ def _query_to_sql(expr: str, search_column: str) -> str | None:
 
 _PING_TIMEOUT = 5.0
 _SCAN_TIMEOUT = 25.0
+_SAMPLE_PAGE_SIZE = 1000
+_SAMPLE_MAX_PAGES = 10
+_SAMPLE_KEYS_PER_FORMAT = 50
 
 
 class ConnectionAdapter(Protocol):
@@ -631,6 +634,37 @@ class S3ConnectionAdapter(BaseAdapter):
                 return [(fmt, reader, opts), *rest]
         return list(self._READERS)
 
+    async def _sample_bucket(self, creds: dict, bucket: str, prefix: str) -> dict[str, list[str]]:
+        """List up to _SAMPLE_MAX_PAGES pages under `prefix`, bucketing keys by
+        extension, stopping once every known format has enough samples. This bounds
+        listing cost to a fixed number of API calls regardless of bucket size --
+        unlike a DuckDB recursive glob (``**/*.ext``), which must enumerate every
+        matching key before it can start reading, and is what made preview/fetch_page
+        time out on very large buckets."""
+        import aioboto3
+        by_fmt: dict[str, list[str]] = {fmt: [] for fmt, _, _ in self._READERS}
+        token = None
+        try:
+            session = aioboto3.Session()
+            async with session.client("s3", **self._s3_client_kwargs(creds)) as s3:
+                for _ in range(_SAMPLE_MAX_PAGES):
+                    kwargs: dict = {"Bucket": bucket, "Prefix": prefix, "MaxKeys": _SAMPLE_PAGE_SIZE}
+                    if token:
+                        kwargs["ContinuationToken"] = token
+                    resp = await asyncio.wait_for(s3.list_objects_v2(**kwargs), timeout=_PING_TIMEOUT)
+                    for obj in resp.get("Contents", []):
+                        low = obj["Key"].lower()
+                        for fmt, keys in by_fmt.items():
+                            if len(keys) < _SAMPLE_KEYS_PER_FORMAT and low.endswith(f".{fmt}"):
+                                keys.append(obj["Key"])
+                                break
+                    if not resp.get("IsTruncated") or all(len(v) >= _SAMPLE_KEYS_PER_FORMAT for v in by_fmt.values()):
+                        break
+                    token = resp.get("NextContinuationToken")
+        except Exception as exc:
+            logger.debug("s3_sample_bucket_failed", bucket=bucket, prefix=prefix, error=str(exc))
+        return by_fmt
+
     def _duckdb_con(self, creds: dict):
         import duckdb
         temp_dir = creds.get("duckdb_temp_dir", "") or "/tmp/duckdb_temp"
@@ -673,14 +707,15 @@ class S3ConnectionAdapter(BaseAdapter):
         key_prefix = creds.get("key_prefix", "") or getattr(self._conn, "key_prefix", "")
         where = self._time_where(creds, start, end)
         prefix = key_prefix.rstrip("/") + "/" if key_prefix else ""
-        readers = await self._ordered_readers(creds, bucket, prefix)
+        by_fmt = await self._sample_bucket(creds, bucket, prefix)
+        readers = [(fmt, reader, opts) for fmt, reader, opts in self._READERS if by_fmt.get(fmt)]
 
         def _scan() -> list[dict]:
             con = self._duckdb_con(creds)
             for fmt, reader, opts in readers:
-                path = f"s3://{bucket}/{prefix}**/*.{fmt}"
+                paths = ", ".join(f"'s3://{bucket}/{key}'" for key in by_fmt[fmt])
                 try:
-                    rows = con.execute(f"SELECT * FROM {reader}('{path}'{opts}){where} LIMIT {limit}").fetchall()
+                    rows = con.execute(f"SELECT * FROM {reader}([{paths}]{opts}){where} LIMIT {limit}").fetchall()
                     cols = [d[0] for d in (con.description or [])]
                     return [dict(zip(cols, row)) for row in rows]
                 except Exception as exc:
@@ -733,15 +768,16 @@ class S3ConnectionAdapter(BaseAdapter):
         ts_col = creds.get("timestamp_column", "timestamp")
         order_by = f" ORDER BY {ts_col}" if ts_col else ""
         prefix = key_prefix.rstrip("/") + "/" if key_prefix else ""
-        readers = await self._ordered_readers(creds, bucket, prefix)
+        by_fmt = await self._sample_bucket(creds, bucket, prefix)
+        readers = [(fmt, reader, opts) for fmt, reader, opts in self._READERS if by_fmt.get(fmt)]
 
         def _scan() -> list[dict]:
             con = self._duckdb_con(creds)
             for fmt, reader, opts in readers:
-                path = f"s3://{bucket}/{prefix}**/*.{fmt}"
+                paths = ", ".join(f"'s3://{bucket}/{key}'" for key in by_fmt[fmt])
                 try:
                     rows = con.execute(
-                        f"SELECT * FROM {reader}('{path}'{opts}){where}{order_by} LIMIT {limit} OFFSET {offset}"
+                        f"SELECT * FROM {reader}([{paths}]{opts}){where}{order_by} LIMIT {limit} OFFSET {offset}"
                     ).fetchall()
                     cols = [d[0] for d in (con.description or [])]
                     return [dict(zip(cols, row)) for row in rows]
