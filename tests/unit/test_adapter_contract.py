@@ -48,6 +48,9 @@ def _make_s3_mocks():
     """Return (mock_session, asyncio_to_thread_patch) context for S3 adapter."""
     mock_s3 = AsyncMock()
     mock_s3.head_bucket = AsyncMock(return_value={})
+    mock_s3.list_objects_v2 = AsyncMock(
+        return_value={"Contents": [{"Key": "data.parquet"}], "IsTruncated": False}
+    )
     mock_cm = MagicMock()
     mock_cm.__aenter__ = AsyncMock(return_value=mock_s3)
     mock_cm.__aexit__ = AsyncMock(return_value=False)

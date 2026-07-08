@@ -636,11 +636,13 @@ class S3ConnectionAdapter(BaseAdapter):
 
     async def _sample_bucket(self, creds: dict, bucket: str, prefix: str) -> dict[str, list[str]]:
         """List up to _SAMPLE_MAX_PAGES pages under `prefix`, bucketing keys by
-        extension, stopping once every known format has enough samples. This bounds
+        extension, stopping once any known format has enough samples. This bounds
         listing cost to a fixed number of API calls regardless of bucket size --
         unlike a DuckDB recursive glob (``**/*.ext``), which must enumerate every
         matching key before it can start reading, and is what made preview/fetch_page
-        time out on very large buckets."""
+        time out on very large buckets. Callers should fall back to the recursive
+        glob if this returns no matches at all, since the data may simply live
+        further into the bucket than the sample reached."""
         import aioboto3
         by_fmt: dict[str, list[str]] = {fmt: [] for fmt, _, _ in self._READERS}
         token = None
@@ -658,7 +660,7 @@ class S3ConnectionAdapter(BaseAdapter):
                             if len(keys) < _SAMPLE_KEYS_PER_FORMAT and low.endswith(f".{fmt}"):
                                 keys.append(obj["Key"])
                                 break
-                    if not resp.get("IsTruncated") or all(len(v) >= _SAMPLE_KEYS_PER_FORMAT for v in by_fmt.values()):
+                    if not resp.get("IsTruncated") or any(len(v) >= _SAMPLE_KEYS_PER_FORMAT for v in by_fmt.values()):
                         break
                     token = resp.get("NextContinuationToken")
         except Exception as exc:
@@ -709,6 +711,10 @@ class S3ConnectionAdapter(BaseAdapter):
         prefix = key_prefix.rstrip("/") + "/" if key_prefix else ""
         by_fmt = await self._sample_bucket(creds, bucket, prefix)
         readers = [(fmt, reader, opts) for fmt, reader, opts in self._READERS if by_fmt.get(fmt)]
+        # If the bounded sample above found no matching keys, the data may simply
+        # live further into the bucket than the sample reached -- fall back to the
+        # slower recursive glob rather than silently reporting an empty preview.
+        fallback_readers = list(self._READERS) if not readers else []
 
         def _scan() -> list[dict]:
             con = self._duckdb_con(creds)
@@ -716,6 +722,15 @@ class S3ConnectionAdapter(BaseAdapter):
                 paths = ", ".join(f"'s3://{bucket}/{key}'" for key in by_fmt[fmt])
                 try:
                     rows = con.execute(f"SELECT * FROM {reader}([{paths}]{opts}){where} LIMIT {limit}").fetchall()
+                    cols = [d[0] for d in (con.description or [])]
+                    return [dict(zip(cols, row)) for row in rows]
+                except Exception as exc:
+                    logger.debug("s3_reader_failed", bucket=bucket, fmt=fmt, error=str(exc))
+                    continue
+            for fmt, reader, opts in fallback_readers:
+                path = f"s3://{bucket}/{prefix}**/*.{fmt}"
+                try:
+                    rows = con.execute(f"SELECT * FROM {reader}('{path}'{opts}){where} LIMIT {limit}").fetchall()
                     cols = [d[0] for d in (con.description or [])]
                     return [dict(zip(cols, row)) for row in rows]
                 except Exception as exc:
@@ -770,6 +785,9 @@ class S3ConnectionAdapter(BaseAdapter):
         prefix = key_prefix.rstrip("/") + "/" if key_prefix else ""
         by_fmt = await self._sample_bucket(creds, bucket, prefix)
         readers = [(fmt, reader, opts) for fmt, reader, opts in self._READERS if by_fmt.get(fmt)]
+        # See preview(): fall back to the recursive glob if the bounded sample
+        # found nothing, rather than silently reporting an empty page.
+        fallback_readers = list(self._READERS) if not readers else []
 
         def _scan() -> list[dict]:
             con = self._duckdb_con(creds)
@@ -778,6 +796,17 @@ class S3ConnectionAdapter(BaseAdapter):
                 try:
                     rows = con.execute(
                         f"SELECT * FROM {reader}([{paths}]{opts}){where}{order_by} LIMIT {limit} OFFSET {offset}"
+                    ).fetchall()
+                    cols = [d[0] for d in (con.description or [])]
+                    return [dict(zip(cols, row)) for row in rows]
+                except Exception as exc:
+                    logger.debug("s3_reader_failed", bucket=bucket, fmt=fmt, error=str(exc))
+                    continue
+            for fmt, reader, opts in fallback_readers:
+                path = f"s3://{bucket}/{prefix}**/*.{fmt}"
+                try:
+                    rows = con.execute(
+                        f"SELECT * FROM {reader}('{path}'{opts}){where}{order_by} LIMIT {limit} OFFSET {offset}"
                     ).fetchall()
                     cols = [d[0] for d in (con.description or [])]
                     return [dict(zip(cols, row)) for row in rows]
