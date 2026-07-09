@@ -104,6 +104,11 @@ def _infer_schema(records: list[dict]) -> dict[str, dict]:
     def _walk(obj: Any, prefix: str, depth: int) -> None:
         if depth > 3:
             return
+        if isinstance(obj, str) and obj[:1] in ("{", "["):
+            try:
+                obj = json.loads(obj)
+            except (json.JSONDecodeError, ValueError):
+                pass
         if isinstance(obj, dict):
             for k, v in obj.items():
                 if str(k).startswith("_"):

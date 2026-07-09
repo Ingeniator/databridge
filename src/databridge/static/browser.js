@@ -225,7 +225,7 @@
 
   function renderSchemaSection(fields) {
     const chipsEl = document.getElementById('schema-field-chips');
-    const entries = Object.entries(fields || {}).slice(0, 12);
+    const entries = Object.entries(fields || {});
     chipsEl.innerHTML = entries.map(([k, v]) => {
       const isTs = k === _filterState.time_field;
       const score = _fieldTimestampScore(k);

@@ -39,6 +39,23 @@ def test_nested_dict_uses_dot_notation():
     assert "body"       not in schema   # intermediate dicts are not emitted
 
 
+def test_json_string_value_is_parsed_and_nested():
+    schema = _infer_schema([{"body": '{"cost": 0.01, "model": "gpt-4"}'}])
+    assert "body.cost"  in schema
+    assert "body.model" in schema
+    assert "body"       not in schema
+
+
+def test_non_json_string_stays_flat():
+    schema = _infer_schema([{"body": "just a plain log line"}])
+    assert schema["body"] == {"type": "string", "example": "just a plain log line"}
+
+
+def test_malformed_json_string_stays_flat():
+    schema = _infer_schema([{"body": "{not valid json"}])
+    assert schema["body"]["type"] == "string"
+
+
 def test_depth_limit_three_levels():
     # leaf at depth 3 (a.b.c) is included
     schema_3 = _infer_schema([{"a": {"b": {"c": "leaf"}}}])
