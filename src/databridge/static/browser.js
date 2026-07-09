@@ -47,6 +47,8 @@
 
   // cell value popover state
   let _cellPopover = null;
+  let _cellPopoverTd = null;
+  let _cellPopoverExpanded = false;
 
   // ── Helpers ────────────────────────────────────────────────────────────────
   const base = () => document.querySelector('[data-base]')?.dataset.base || '';
@@ -271,6 +273,16 @@
         <span class="font-mono text-[10px]">${esc(f)}</span>
       </label>`;
     }).join('');
+    updateColumnPickerMaster();
+  }
+
+  function updateColumnPickerMaster() {
+    const master = document.getElementById('column-picker-all');
+    if (!master || !_schema) return;
+    const fields = Object.keys(_schema);
+    const visibleCount = fields.filter(f => !_visibleColumns || _visibleColumns.has(f)).length;
+    master.checked = visibleCount === fields.length;
+    master.indeterminate = visibleCount > 0 && visibleCount < fields.length;
   }
 
   function _onColumnVisChange(field, checked) {
@@ -280,6 +292,13 @@
     if (!_visibleColumns) _visibleColumns = new Set();
     if (checked) _visibleColumns.add(field);
     else _visibleColumns.delete(field);
+    updateColumnPickerMaster();
+    renderPreviewTable(_previewRows);
+  }
+
+  function _onColumnVisAllChange(checked) {
+    _visibleColumns = checked ? null : new Set();
+    renderColumnPicker();
     renderPreviewTable(_previewRows);
   }
 
@@ -679,29 +698,67 @@
 
   function _prettyPrintIfJson(text) {
     const trimmed = text.trim();
-    if (trimmed[0] !== '{' && trimmed[0] !== '[') return text;
+    if (trimmed[0] !== '{' && trimmed[0] !== '[') return null;
     try {
       return JSON.stringify(JSON.parse(trimmed), null, 2);
     } catch {
-      return text;
+      return null;
     }
   }
+
+  // Tokenizes already-pretty-printed JSON into <span>-wrapped, syntax-highlighted HTML.
+  // Escapes &/</> first (not quotes) so the string-matching regex below still sees literal " chars.
+  function _highlightJson(json) {
+    const escaped = json.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    return escaped.replace(
+      /("(?:\\u[a-fA-F0-9]{4}|\\[^u]|[^\\"])*"(\s*:)?|\btrue\b|\bfalse\b|\bnull\b|-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)/g,
+      (match) => {
+        let cls = 'jn';
+        if (/^"/.test(match)) cls = /:$/.test(match) ? 'jk' : 'js';
+        else if (match === 'true' || match === 'false') cls = 'jb';
+        else if (match === 'null') cls = 'jz';
+        return `<span class="${cls}">${match}</span>`;
+      }
+    );
+  }
+
+  const CELL_POPOVER_COMPACT_CLASSES = ['max-w-sm', 'w-max', 'max-h-64'];
+  const CELL_POPOVER_EXPANDED_CLASSES = ['inset-8', 'w-auto', 'h-auto', 'max-w-none', 'max-h-none'];
 
   function _showCellPopover(td) {
     const text = td.dataset.full ?? '';
     const pop = _ensureCellPopover();
+    _cellPopoverTd = td;
+    _cellPopoverExpanded = false;
+    pop.classList.remove(...CELL_POPOVER_EXPANDED_CLASSES);
+    pop.classList.add(...CELL_POPOVER_COMPACT_CLASSES);
+
+    const pretty = _prettyPrintIfJson(text);
+    const body = pretty != null
+      ? `<pre class="text-xs font-mono whitespace-pre-wrap break-all select-text json-pretty">${_highlightJson(pretty)}</pre>`
+      : `<pre class="text-xs font-mono text-on-surface whitespace-pre-wrap break-all select-text">${esc(text)}</pre>`;
 
     pop.innerHTML = `
       <div class="flex items-center justify-between gap-4 mb-2">
         <span class="text-[10px] font-label font-bold uppercase tracking-widest text-on-surface-variant">Full Value</span>
-        <button onmousedown="event.preventDefault(); window.DB._hideCellPopover()" class="text-on-surface-variant hover:text-on-surface">
-          <span class="material-symbols-outlined text-[16px]">close</span>
-        </button>
+        <div class="flex items-center gap-1">
+          <button onmousedown="event.preventDefault(); window.DB._toggleCellPopoverExpand()" class="text-on-surface-variant hover:text-on-surface" aria-label="Expand">
+            <span class="material-symbols-outlined text-[16px] cp-expand-icon">open_in_full</span>
+          </button>
+          <button onmousedown="event.preventDefault(); window.DB._hideCellPopover()" class="text-on-surface-variant hover:text-on-surface" aria-label="Close">
+            <span class="material-symbols-outlined text-[16px]">close</span>
+          </button>
+        </div>
       </div>
-      <pre class="text-xs font-mono text-on-surface whitespace-pre-wrap break-all select-all">${esc(_prettyPrintIfJson(text))}</pre>`;
+      ${body}`;
 
     pop.classList.remove('hidden');
+    _positionCellPopover(td);
+  }
 
+  function _positionCellPopover(td) {
+    const pop = _cellPopover;
+    if (!pop) return;
     const rect = td.getBoundingClientRect();
     const popW = Math.min(384, window.innerWidth - 32);
     pop.style.maxWidth = popW + 'px';
@@ -717,8 +774,30 @@
     pop.style.top = Math.max(8, top) + 'px';
   }
 
+  function _toggleCellPopoverExpand() {
+    const pop = _cellPopover;
+    if (!pop) return;
+    _cellPopoverExpanded = !_cellPopoverExpanded;
+    const icon = pop.querySelector('.cp-expand-icon');
+
+    if (_cellPopoverExpanded) {
+      pop.classList.remove(...CELL_POPOVER_COMPACT_CLASSES);
+      pop.classList.add(...CELL_POPOVER_EXPANDED_CLASSES);
+      pop.style.left = '';
+      pop.style.top = '';
+      pop.style.maxWidth = '';
+      if (icon) icon.textContent = 'close_fullscreen';
+    } else {
+      pop.classList.remove(...CELL_POPOVER_EXPANDED_CLASSES);
+      pop.classList.add(...CELL_POPOVER_COMPACT_CLASSES);
+      if (icon) icon.textContent = 'open_in_full';
+      if (_cellPopoverTd) _positionCellPopover(_cellPopoverTd);
+    }
+  }
+
   function _hideCellPopover() {
     _cellPopover?.classList.add('hidden');
+    _cellPopoverExpanded = false;
   }
 
   // ── Field Picker combobox ──────────────────────────────────────────────────
@@ -1458,6 +1537,7 @@
       _fpDropdown.classList.add('hidden');
     }
     if (_cellPopover && !_cellPopover.contains(e.target) && !e.target.closest('td[data-full]')) {
+      if (window.getSelection().toString()) return; // preserve an in-progress text selection
       _cellPopover.classList.add('hidden');
     }
   });
@@ -1520,6 +1600,7 @@
     refreshSchema,
     toggleColumnPicker,
     _onColumnVisChange,
+    _onColumnVisAllChange,
     cycleTimeField,
     setTimestampField,
     onTimeRangeChange,
@@ -1538,6 +1619,7 @@
     clearAll,
     _showCellPopover,
     _hideCellPopover,
+    _toggleCellPopoverExpand,
     _onFieldPickerFocus,
     _onFieldPickerInput,
     _onFieldPickerSelect,
