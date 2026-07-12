@@ -85,6 +85,12 @@ async def run_export_job(ctx: dict, job_id: str) -> None:
         end_str = (filter_raw or {}).get("end")
         start = datetime.fromisoformat(start_str) if start_str else None
         end = datetime.fromisoformat(end_str) if end_str else None
+        # The browser auto-detects a timestamp field client-side and sends it here;
+        # it's not necessarily saved as the connection's timestamp_column credential
+        # (that only happens if the user explicitly pins it), so it must override
+        # the credential per-job or the adapter falls back to a hardcoded "timestamp"
+        # column that may not exist on this source.
+        time_field = (filter_raw or {}).get("time_field")
 
         if datasource_type == "connection":
             conn_row = await pool.fetchrow(
@@ -92,10 +98,11 @@ async def run_export_job(ctx: dict, job_id: str) -> None:
             )
             if conn_row is None:
                 raise ValueError(f"connection {datasource_ref!r} not found")
-            from databridge.adapters import get_adapter
+            from databridge.adapters import apply_time_field_override, get_adapter
             from databridge.crypto import decrypt_credentials
             creds = decrypt_credentials(bytes(conn_row["credentials_enc"]))
             adapter = get_adapter(dict(conn_row), creds)
+            adapter, creds = apply_time_field_override(adapter, dict(conn_row), creds, time_field)
         else:
             # system source — match by name or deterministic UUID
             cfg = next(
@@ -105,8 +112,9 @@ async def run_export_job(ctx: dict, job_id: str) -> None:
             )
             if cfg is None:
                 raise ValueError(f"system source {datasource_ref!r} not found in config")
-            from databridge.adapters import get_adapter
+            from databridge.adapters import apply_time_field_override, get_adapter
             adapter = get_adapter(cfg, {})
+            adapter, _ = apply_time_field_override(adapter, cfg, {}, time_field)
 
         # Count total
         total = await adapter.count(query, start, end)

@@ -185,6 +185,9 @@ def _infer_schema_nested(records: list[dict]) -> dict[str, dict]:
 
 class BaseAdapter:
     _health_path: str | None = None
+    # Whether this adapter type can filter/order by an arbitrary configured
+    # timestamp column at all (see apply_time_field_override below).
+    supports_time_field: bool = True
 
     def __init__(self, conn_or_config, creds) -> None:
         self._conn = conn_or_config
@@ -558,6 +561,12 @@ class TrinoConnectionAdapter(BaseAdapter):
 # ── Langfuse ──────────────────────────────────────────────────────────────────
 
 class LangfuseConnectionAdapter(BaseAdapter):
+    # Langfuse's API always filters traces by their own creation timestamp
+    # (fromTimestamp/toTimestamp) — it has no notion of an arbitrary, user-chosen
+    # timestamp column, so a per-request/per-job timestamp_column override would
+    # be silently ignored if applied.
+    supports_time_field = False
+
     async def ping(self) -> None:
         async with httpx.AsyncClient(timeout=_PING_TIMEOUT) as client:
             r = await client.get(f"{self._url}/api/public/health")
@@ -922,3 +931,15 @@ def get_adapter(conn_or_config, creds) -> ConnectionAdapter:
     if cls is None:
         raise ValueError(f"Unknown connection type: {source_type!r}")
     return cls(conn_or_config, creds)
+
+
+def apply_time_field_override(
+    adapter: ConnectionAdapter, conn_or_config, creds: dict, time_field: str | None
+) -> tuple[ConnectionAdapter, dict]:
+    """Rebuild `adapter` with `timestamp_column` overridden to `time_field`, unless
+    `time_field` wasn't supplied or the adapter type can't honor a per-request/per-job
+    timestamp column at all (see `BaseAdapter.supports_time_field`)."""
+    if time_field is None or not getattr(adapter, "supports_time_field", True):
+        return adapter, creds
+    creds = {**creds, "timestamp_column": time_field}
+    return get_adapter(conn_or_config, creds), creds

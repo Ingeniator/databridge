@@ -12,7 +12,7 @@ import structlog
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import JSONResponse
 
-from databridge.adapters import get_adapter, _infer_schema
+from databridge.adapters import apply_time_field_override, get_adapter, _infer_schema
 from databridge.auth import AuthContext, get_auth
 from databridge.config import SystemSourceConfig, get_settings
 from databridge.crypto import decrypt_credentials, encrypt_credentials
@@ -283,6 +283,7 @@ async def preview_connection(
                 raise HTTPException(status_code=400, detail="preview is only available for source connections")
             creds = {f: getattr(src, f) for f in src.__dataclass_fields__ if f not in ("name", "type")}
             adapter = get_adapter(src, creds)
+            adapter, creds = apply_time_field_override(adapter, src, creds, body.time_field)
             try:
                 results, total_count = await asyncio.gather(
                     adapter.preview(body.query, body.start, body.end, body.limit),
@@ -301,6 +302,7 @@ async def preview_connection(
 
     creds = decrypt_credentials(row["credentials_enc"])
     adapter = get_adapter(row, creds)
+    adapter, creds = apply_time_field_override(adapter, row, creds, body.time_field)
     try:
         results, total_count = await asyncio.gather(
             adapter.preview(body.query, body.start, body.end, body.limit),
@@ -328,6 +330,7 @@ async def schema_connection(
     id: UUID,
     start: datetime | None = None,
     end: datetime | None = None,
+    time_field: str | None = None,
     auth: AuthContext = Depends(get_auth),
     pool: asyncpg.Pool = Depends(get_pool),
     system_sources: list[SystemSourceConfig] = Depends(get_system_sources),
@@ -336,6 +339,7 @@ async def schema_connection(
         if src.id == id:
             creds = {f: getattr(src, f) for f in src.__dataclass_fields__ if f not in ("name", "type")}
             adapter = get_adapter(src, creds)
+            adapter, creds = apply_time_field_override(adapter, src, creds, time_field)
             try:
                 fields_raw, sample_count = await adapter.schema(start, end)
             except NotImplementedError:
@@ -354,6 +358,7 @@ async def schema_connection(
 
     creds = decrypt_credentials(row["credentials_enc"])
     adapter = get_adapter(row, creds)
+    adapter, creds = apply_time_field_override(adapter, row, creds, time_field)
     try:
         fields_raw, sample_count = await adapter.schema(start, end)
     except NotImplementedError:
