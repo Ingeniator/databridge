@@ -108,6 +108,7 @@ class PreviewRequest(BaseModel):
     start: datetime | None = None
     end: datetime | None = None
     time_field: str | None = None
+    sort_by: str | None = None
     limit: Annotated[int, Field(ge=1, le=100_000)] = 50
 
 

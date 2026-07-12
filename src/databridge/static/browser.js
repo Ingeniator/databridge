@@ -10,7 +10,7 @@
   let _activeType = null;  // 'connection' | 'system'
   let _editingId = null;
   let _schema = null;      // { field: { type, example }, ... }
-  let _filterState = { query: '', start: null, end: null, time_field: null };
+  let _filterState = { query: '', start: null, end: null, time_field: null, sort_by: null };
   // Raw range inputs, kept separate from _filterState.start/end (which are the
   // final shifted UTC values sent to the API) so changing _tzOffsetMinutes
   // after a range is picked can re-derive without double-shifting.
@@ -162,7 +162,7 @@
     _previewRows = [];
     _totalCount = 0;
     _previewLimit = 50;
-    _filterState = { query: '', start: null, end: null, time_field: null };
+    _filterState = { query: '', start: null, end: null, time_field: null, sort_by: null };
     _rangePreset = null;
     _customStart = null;
     _customEnd = null;
@@ -388,6 +388,14 @@
     const cycle = [null, ...Object.keys(_schema)];
     const idx = cycle.indexOf(_filterState.time_field);
     _applyTimestampField(cycle[(idx + 1) % cycle.length]);
+  }
+
+  // Independent of the timestamp filter field above -- this only controls the
+  // ORDER BY on the preview query, defaulting server-side to the timestamp
+  // field when unset (see PreviewRequest.sort_by).
+  function setSortField(fieldName) {
+    _filterState.sort_by = _filterState.sort_by === fieldName ? null : fieldName;
+    loadPreview();
   }
 
   function enableTimeRangeSelect(enabled) {
@@ -657,7 +665,12 @@
     let cols = Array.from(new Set(rows.flatMap(r => Object.keys(r))));
     if (_visibleColumns) cols = cols.filter(c => _visibleColumns.has(c));
 
-    thead.innerHTML = `<tr>${cols.map(c => `<th class="py-1 px-2 font-medium text-left whitespace-nowrap">${esc(c)}</th>`).join('')}</tr>`;
+    const activeSort = _filterState.sort_by || _filterState.time_field;
+    thead.innerHTML = `<tr>${cols.map(c => {
+      const isSorted = c === activeSort;
+      return `<th class="py-1 px-2 font-medium text-left whitespace-nowrap cursor-pointer select-none hover:text-primary transition-colors${isSorted ? ' text-primary' : ''}"
+        title="Sort preview by ${esc(c)}" onclick="window.DB.setSortField('${esc(c)}')">${esc(c)}${isSorted ? ' <span class="material-symbols-outlined text-[14px] align-middle">arrow_downward</span>' : ''}</th>`;
+    }).join('')}</tr>`;
     tbody.innerHTML = rows.map((row, n) => `
       <tr data-testid="preview-row-${n}" class="hover:bg-gray-50">
         ${cols.map(c => `<td class="py-1 px-2 font-mono whitespace-nowrap max-w-xs truncate cursor-pointer hover:text-primary transition-colors" data-full="${esc(cellStr(row[c] ?? ''))}" onclick="window.DB._showCellPopover(this)">${statusCellHtml(c, row[c] ?? '')}</td>`).join('')}
@@ -708,6 +721,7 @@
         query: _filterState.query,
         limit: _previewLimit,
         time_field: _filterState.time_field || undefined,
+        sort_by: _filterState.sort_by || undefined,
         start: _filterState.start || undefined,
         end: _filterState.end || undefined,
       };
@@ -752,7 +766,7 @@
   }
 
   function clearAll() {
-    _filterState = { query: '', start: null, end: null, time_field: _filterState.time_field };
+    _filterState = { query: '', start: null, end: null, time_field: _filterState.time_field, sort_by: _filterState.sort_by };
     _rangePreset = null;
     _customStart = null;
     _customEnd = null;
@@ -1708,6 +1722,7 @@
     _onColumnVisAllChange,
     cycleTimeField,
     setTimestampField,
+    setSortField,
     onTimeRangeChange,
     onCustomRangeChange,
     onTzOffsetChange,

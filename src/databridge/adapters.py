@@ -54,6 +54,16 @@ def _safe_search_col(creds: dict) -> str:
     return _safe_ident(creds.get("search_column", "message"), "message", cred_name="search_column")
 
 
+def _safe_sort_col(sort_by: str | None, ts_col: str) -> str:
+    """Return the column to sort preview results by. `sort_by` is a per-request override
+    (picked by clicking a column header in the preview table) validated as a plain SQL
+    identifier before it's interpolated into a query string; it falls back to the
+    configured timestamp column when absent or invalid."""
+    if not sort_by:
+        return ts_col
+    return _safe_ident(sort_by, ts_col, cred_name="sort_by")
+
+
 def _query_to_sql(expr: str, search_column: str) -> str | None:
     """Translate a filter expression to a SQL condition fragment.
 
@@ -96,7 +106,9 @@ _SAMPLE_KEYS_PER_FORMAT = 50
 
 class ConnectionAdapter(Protocol):
     async def ping(self) -> None: ...
-    async def preview(self, query: str, start: datetime | None, end: datetime | None, limit: int) -> list[dict]: ...
+    async def preview(
+        self, query: str, start: datetime | None, end: datetime | None, limit: int, sort_by: str | None = None
+    ) -> list[dict]: ...
     async def schema(
         self, start: datetime | None, end: datetime | None, *, nested: bool = False
     ) -> tuple[dict[str, dict], int]: ...
@@ -229,7 +241,9 @@ class BaseAdapter:
             r = await client.get(f"{self._url}{self._health_path}")
             r.raise_for_status()
 
-    async def preview(self, query: str, start: datetime | None, end: datetime | None, limit: int) -> list[dict]:
+    async def preview(
+        self, query: str, start: datetime | None, end: datetime | None, limit: int, sort_by: str | None = None
+    ) -> list[dict]:
         raise NotImplementedError
 
     async def count(self, query: str, start: datetime | None, end: datetime | None) -> int:
@@ -280,7 +294,9 @@ class ClickHouseConnectionAdapter(BaseAdapter):
             r = await client.get(f"{self._url}/ping")
             r.raise_for_status()
 
-    async def preview(self, query: str, start: datetime | None, end: datetime | None, limit: int) -> list[dict]:
+    async def preview(
+        self, query: str, start: datetime | None, end: datetime | None, limit: int, sort_by: str | None = None
+    ) -> list[dict]:
         creds = self._creds_dict()
         user = creds.get("user", "")
         password = creds.get("password", "")
@@ -298,7 +314,8 @@ class ClickHouseConnectionAdapter(BaseAdapter):
             conditions.append(f"{ts_col} < parseDateTimeBestEffort('{end.isoformat()}')")
 
         where = f" WHERE {' AND '.join(conditions)}" if conditions else ""
-        order_by = f" ORDER BY {ts_col} DESC" if ts_col else ""
+        sort_col = _safe_sort_col(sort_by, ts_col)
+        order_by = f" ORDER BY {sort_col} DESC" if sort_col else ""
         sql = f"SELECT * FROM {database}.{table}{where}{order_by} LIMIT {limit} FORMAT JSONEachRow"
 
         params: dict = {"query": sql}
@@ -431,7 +448,9 @@ class TrinoConnectionAdapter(BaseAdapter):
                     break
         return rows
 
-    async def preview(self, query: str, start: datetime | None, end: datetime | None, limit: int) -> list[dict]:
+    async def preview(
+        self, query: str, start: datetime | None, end: datetime | None, limit: int, sort_by: str | None = None
+    ) -> list[dict]:
         creds = self._creds_dict()
         user = creds.get("user", "trino")
         catalog = creds.get("catalog", "")
@@ -448,7 +467,8 @@ class TrinoConnectionAdapter(BaseAdapter):
         if ts_col and end:
             conditions.append(f"{ts_col} < TIMESTAMP '{end.strftime('%Y-%m-%d %H:%M:%S')}'")
         where = f" WHERE {' AND '.join(conditions)}" if conditions else ""
-        order_by = f" ORDER BY {ts_col} DESC" if ts_col else ""
+        sort_col = _safe_sort_col(sort_by, ts_col)
+        order_by = f" ORDER BY {sort_col} DESC" if sort_col else ""
         sql = f"SELECT * FROM {table}{where}{order_by} LIMIT {limit}"
 
         headers = {"X-Trino-User": user, "Content-Type": "text/plain"}
@@ -569,6 +589,14 @@ class LangfuseConnectionAdapter(BaseAdapter):
     # be silently ignored if applied.
     supports_time_field = False
 
+    # The traces endpoint's `orderBy` only accepts these field names -- unlike the
+    # SQL-backed adapters, an arbitrary column can't be spliced in, so a `sort_by`
+    # outside this set falls back to the timestamp default rather than sending
+    # Langfuse a value it would reject.
+    _SORTABLE_FIELDS = {
+        "id", "timestamp", "name", "userId", "release", "version", "public", "bookmarked", "sessionId",
+    }
+
     async def ping(self) -> None:
         async with httpx.AsyncClient(timeout=_PING_TIMEOUT) as client:
             r = await client.get(f"{self._url}/api/public/health")
@@ -579,9 +607,12 @@ class LangfuseConnectionAdapter(BaseAdapter):
         secret_key = creds.get("secret_key", "") or creds.get("secret_access_key", "")
         return (public_key, secret_key) if public_key else None
 
-    async def preview(self, query: str, start: datetime | None, end: datetime | None, limit: int) -> list[dict]:
+    async def preview(
+        self, query: str, start: datetime | None, end: datetime | None, limit: int, sort_by: str | None = None
+    ) -> list[dict]:
         creds = self._creds_dict()
-        params: dict = {"limit": limit, "orderBy": "timestamp.desc"}
+        order_field = sort_by if sort_by in self._SORTABLE_FIELDS else "timestamp"
+        params: dict = {"limit": limit, "orderBy": f"{order_field}.desc"}
         if query:
             params["name"] = query
         if start:
@@ -646,7 +677,9 @@ class DatasetSinkConnectionAdapter(BaseAdapter):
             r = await client.get(f"{self._url}/health")
             r.raise_for_status()
 
-    async def preview(self, query: str, start: datetime | None, end: datetime | None, limit: int) -> list[dict]:
+    async def preview(
+        self, query: str, start: datetime | None, end: datetime | None, limit: int, sort_by: str | None = None
+    ) -> list[dict]:
         raise NotImplementedError("preview not supported for sink connections")
 
     async def schema(
@@ -786,13 +819,15 @@ class S3ConnectionAdapter(BaseAdapter):
             conditions.append(f"{ts_col} < TIMESTAMP '{end.isoformat(sep=' ')}'")
         return f" WHERE {' AND '.join(conditions)}" if conditions else ""
 
-    async def preview(self, query: str, start: datetime | None, end: datetime | None, limit: int) -> list[dict]:
+    async def preview(
+        self, query: str, start: datetime | None, end: datetime | None, limit: int, sort_by: str | None = None
+    ) -> list[dict]:
         creds = self._creds_dict()
         bucket = creds.get("bucket", "") or getattr(self._conn, "bucket", "")
         key_prefix = creds.get("key_prefix", "") or getattr(self._conn, "key_prefix", "")
         where = self._time_where(creds, start, end)
-        ts_col = _safe_ts_col(creds)
-        order_by = f" ORDER BY {ts_col} DESC" if ts_col else ""
+        sort_col = _safe_sort_col(sort_by, _safe_ts_col(creds))
+        order_by = f" ORDER BY {sort_col} DESC" if sort_col else ""
         prefix = key_prefix.rstrip("/") + "/" if key_prefix else ""
         by_fmt = await self._sample_bucket(creds, bucket, prefix)
         readers = [(fmt, reader, opts) for fmt, reader, opts in self._READERS if by_fmt.get(fmt)]

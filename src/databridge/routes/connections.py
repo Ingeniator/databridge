@@ -286,7 +286,7 @@ async def preview_connection(
             adapter, creds = apply_time_field_override(adapter, src, creds, body.time_field)
             try:
                 results, total_count = await asyncio.gather(
-                    adapter.preview(body.query, body.start, body.end, body.limit),
+                    adapter.preview(body.query, body.start, body.end, body.limit, sort_by=body.sort_by),
                     _safe_count(adapter, body.query, body.start, body.end),
                 )
             except Exception as exc:
@@ -305,7 +305,7 @@ async def preview_connection(
     adapter, creds = apply_time_field_override(adapter, row, creds, body.time_field)
     try:
         results, total_count = await asyncio.gather(
-            adapter.preview(body.query, body.start, body.end, body.limit),
+            adapter.preview(body.query, body.start, body.end, body.limit, sort_by=body.sort_by),
             _safe_count(adapter, body.query, body.start, body.end),
         )
     except NotImplementedError:
