@@ -67,7 +67,9 @@ _SAMPLE_KEYS_PER_FORMAT = 50
 class ConnectionAdapter(Protocol):
     async def ping(self) -> None: ...
     async def preview(self, query: str, start: datetime | None, end: datetime | None, limit: int) -> list[dict]: ...
-    async def schema(self, start: datetime | None, end: datetime | None) -> tuple[dict[str, dict], int]: ...
+    async def schema(
+        self, start: datetime | None, end: datetime | None, *, nested: bool = False
+    ) -> tuple[dict[str, dict], int]: ...
 
 
 class ExportableAdapter(Protocol):
@@ -99,12 +101,33 @@ def _py_type(val: Any) -> str:
 
 
 def _infer_schema(records: list[dict]) -> dict[str, dict]:
+    """Top-level field schema — matches what the preview table actually renders as columns
+    and what filters can actually act on (no adapter supports nested-path filtering)."""
+    schema: dict[str, dict] = {}
+    for record in records:
+        if not isinstance(record, dict):
+            continue
+        for k, v in record.items():
+            if str(k).startswith("_"):
+                continue
+            if k not in schema:
+                schema[k] = {
+                    "type": _py_type(v),
+                    "example": v if not isinstance(v, (dict, list)) else None,
+                }
+    return schema
+
+
+def _infer_schema_nested(records: list[dict]) -> dict[str, dict]:
+    """Recursively flattens nested objects/stringified JSON into dotted paths (e.g. body.email).
+    Used only for PII candidate-field discovery: masking's dot-path resolver (export/masking.py)
+    can act on nested fields even though preview/filtering cannot."""
     schema: dict[str, dict] = {}
 
     def _walk(obj: Any, prefix: str, depth: int) -> None:
         if depth > 3:
             return
-        if isinstance(obj, str) and obj[:1] in ("{", "["):
+        if isinstance(obj, str) and obj.lstrip()[:1] in ("{", "["):
             try:
                 obj = json.loads(obj)
             except (json.JSONDecodeError, ValueError):
@@ -189,7 +212,9 @@ class BaseAdapter:
     ) -> list[dict]:
         raise NotImplementedError
 
-    async def schema(self, start: datetime | None, end: datetime | None) -> tuple[dict[str, dict], int]:
+    async def schema(
+        self, start: datetime | None, end: datetime | None, *, nested: bool = False
+    ) -> tuple[dict[str, dict], int]:
         if start is None:
             end = datetime.now(timezone.utc)
             start = end - timedelta(days=1)
@@ -210,7 +235,8 @@ class BaseAdapter:
             fallback = await self.preview("", None, None, limit=20)
             all_records = fallback
 
-        return _infer_schema(all_records), len(all_records)
+        infer = _infer_schema_nested if nested else _infer_schema
+        return infer(all_records), len(all_records)
 
 
 # ── ClickHouse ────────────────────────────────────────────────────────────────
@@ -336,8 +362,10 @@ class ClickHouseConnectionAdapter(BaseAdapter):
                     pass
         return results
 
-    async def schema(self, start: datetime | None, end: datetime | None) -> tuple[dict[str, dict], int]:
-        return await super().schema(start, end)
+    async def schema(
+        self, start: datetime | None, end: datetime | None, *, nested: bool = False
+    ) -> tuple[dict[str, dict], int]:
+        return await super().schema(start, end, nested=nested)
 
 
 # ── Trino ─────────────────────────────────────────────────────────────────────
@@ -488,8 +516,10 @@ class TrinoConnectionAdapter(BaseAdapter):
 
         return results
 
-    async def schema(self, start: datetime | None, end: datetime | None) -> tuple[dict[str, dict], int]:
-        return await super().schema(start, end)
+    async def schema(
+        self, start: datetime | None, end: datetime | None, *, nested: bool = False
+    ) -> tuple[dict[str, dict], int]:
+        return await super().schema(start, end, nested=nested)
 
 
 # ── Langfuse ──────────────────────────────────────────────────────────────────
@@ -558,8 +588,10 @@ class LangfuseConnectionAdapter(BaseAdapter):
             r.raise_for_status()
             return r.json().get("data", [])
 
-    async def schema(self, start: datetime | None, end: datetime | None) -> tuple[dict[str, dict], int]:
-        return await super().schema(start, end)
+    async def schema(
+        self, start: datetime | None, end: datetime | None, *, nested: bool = False
+    ) -> tuple[dict[str, dict], int]:
+        return await super().schema(start, end, nested=nested)
 
 
 # ── Dataset sink ──────────────────────────────────────────────────────────────
@@ -573,7 +605,9 @@ class DatasetSinkConnectionAdapter(BaseAdapter):
     async def preview(self, query: str, start: datetime | None, end: datetime | None, limit: int) -> list[dict]:
         raise NotImplementedError("preview not supported for sink connections")
 
-    async def schema(self, start: datetime | None, end: datetime | None) -> dict[str, dict]:
+    async def schema(
+        self, start: datetime | None, end: datetime | None, *, nested: bool = False
+    ) -> dict[str, dict]:
         raise NotImplementedError("schema not supported for sink connections")
 
 
@@ -825,9 +859,12 @@ class S3ConnectionAdapter(BaseAdapter):
         except asyncio.TimeoutError:
             raise TimeoutError(f"S3 scan of bucket '{bucket}' timed out after {_SCAN_TIMEOUT:.0f}s")
 
-    async def schema(self, start: datetime | None, end: datetime | None) -> tuple[dict[str, dict], int]:
+    async def schema(
+        self, start: datetime | None, end: datetime | None, *, nested: bool = False
+    ) -> tuple[dict[str, dict], int]:
         records = await self.preview("", start, end, limit=20)
-        return _infer_schema(records), len(records)
+        infer = _infer_schema_nested if nested else _infer_schema
+        return infer(records), len(records)
 
 
 # ── Registry and factory ──────────────────────────────────────────────────────

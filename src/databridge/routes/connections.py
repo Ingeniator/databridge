@@ -385,7 +385,7 @@ async def pii_fields(
             creds = {f: getattr(src, f) for f in src.__dataclass_fields__ if f not in ("name", "type")}
             adapter = get_adapter(src, creds)
             try:
-                fields_raw, _ = await adapter.schema(None, None)
+                fields_raw, _ = await adapter.schema(None, None, nested=True)
             except Exception:
                 fields_raw = {}
             return PiiFieldsResponse(candidate_fields=pii_candidate_fields(fields_raw))
@@ -397,7 +397,7 @@ async def pii_fields(
     creds = decrypt_credentials(row["credentials_enc"])
     adapter = get_adapter(row, creds)
     try:
-        fields_raw, _ = await adapter.schema(None, None)
+        fields_raw, _ = await adapter.schema(None, None, nested=True)
     except Exception:
         fields_raw = {}
     return PiiFieldsResponse(candidate_fields=pii_candidate_fields(fields_raw))

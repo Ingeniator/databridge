@@ -73,7 +73,9 @@ async def detect_asset_fields(
         # connection_id path — requires DB pool
         raise HTTPException(status_code=501, detail="connection_id support requires DB context; use system_source_name")
 
-    schema_fields, _ = await adapter.schema(None, None)
+    # detect_asset_url_fields expects dotted paths (e.g. "body.image_url"), so this
+    # needs the nested/flattening schema variant, same as /pii-fields.
+    schema_fields, _ = await adapter.schema(None, None, nested=True)
     sample_records = await adapter.preview("", None, None, limit=20)
 
     from databridge.export.asset import detect_asset_url_fields

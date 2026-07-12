@@ -1,4 +1,4 @@
-from databridge.adapters import _infer_schema, _py_type
+from databridge.adapters import _infer_schema, _infer_schema_nested, _py_type
 
 
 # ── _py_type ──────────────────────────────────────────────────────────────────
@@ -19,7 +19,7 @@ def test_py_type_bool_before_int():
     assert _py_type(1)    == "int"
 
 
-# ── _infer_schema ─────────────────────────────────────────────────────────────
+# ── _infer_schema (flat — matches what preview/filtering can actually see) ────
 
 def test_empty_records_returns_empty_schema():
     assert _infer_schema([]) == {}
@@ -32,38 +32,18 @@ def test_flat_record():
     assert schema["count"]      == {"type": "int",    "example": 5}
 
 
-def test_nested_dict_uses_dot_notation():
+def test_nested_dict_stays_top_level():
     schema = _infer_schema([{"body": {"cost": 0.01, "model": "gpt-4"}}])
-    assert "body.cost"  in schema
-    assert "body.model" in schema
-    assert "body"       not in schema   # intermediate dicts are not emitted
+    assert schema["body"]["type"] == "object"
+    assert schema["body"]["example"] is None
+    assert "body.cost"  not in schema
+    assert "body.model" not in schema
 
 
-def test_json_string_value_is_parsed_and_nested():
+def test_json_string_value_stays_flat():
     schema = _infer_schema([{"body": '{"cost": 0.01, "model": "gpt-4"}'}])
-    assert "body.cost"  in schema
-    assert "body.model" in schema
-    assert "body"       not in schema
-
-
-def test_non_json_string_stays_flat():
-    schema = _infer_schema([{"body": "just a plain log line"}])
-    assert schema["body"] == {"type": "string", "example": "just a plain log line"}
-
-
-def test_malformed_json_string_stays_flat():
-    schema = _infer_schema([{"body": "{not valid json"}])
     assert schema["body"]["type"] == "string"
-
-
-def test_depth_limit_three_levels():
-    # leaf at depth 3 (a.b.c) is included
-    schema_3 = _infer_schema([{"a": {"b": {"c": "leaf"}}}])
-    assert "a.b.c" in schema_3
-
-    # leaf at depth 4 (a.b.c.d) is skipped — depth > 3 returns early
-    schema_4 = _infer_schema([{"a": {"b": {"c": {"d": "too deep"}}}}])
-    assert "a.b.c.d" not in schema_4
+    assert "body.cost" not in schema
 
 
 def test_underscore_keys_skipped():
@@ -98,3 +78,40 @@ def test_multiple_records_merged():
 def test_bool_field_type():
     schema = _infer_schema([{"is_cached": True}])
     assert schema["is_cached"]["type"] == "bool"
+
+
+# ── _infer_schema_nested (dotted paths — used only for PII candidate discovery,
+#    since masking's dot-path resolver can act on nested fields) ───────────────
+
+def test_nested_dict_uses_dot_notation():
+    schema = _infer_schema_nested([{"body": {"cost": 0.01, "model": "gpt-4"}}])
+    assert "body.cost"  in schema
+    assert "body.model" in schema
+    assert "body"       not in schema   # intermediate dicts are not emitted
+
+
+def test_json_string_value_is_parsed_and_nested():
+    schema = _infer_schema_nested([{"body": '{"cost": 0.01, "model": "gpt-4"}'}])
+    assert "body.cost"  in schema
+    assert "body.model" in schema
+    assert "body"       not in schema
+
+
+def test_non_json_string_stays_flat():
+    schema = _infer_schema_nested([{"body": "just a plain log line"}])
+    assert schema["body"] == {"type": "string", "example": "just a plain log line"}
+
+
+def test_malformed_json_string_stays_flat():
+    schema = _infer_schema_nested([{"body": "{not valid json"}])
+    assert schema["body"]["type"] == "string"
+
+
+def test_depth_limit_three_levels():
+    # leaf at depth 3 (a.b.c) is included
+    schema_3 = _infer_schema_nested([{"a": {"b": {"c": "leaf"}}}])
+    assert "a.b.c" in schema_3
+
+    # leaf at depth 4 (a.b.c.d) is skipped — depth > 3 returns early
+    schema_4 = _infer_schema_nested([{"a": {"b": {"c": {"d": "too deep"}}}}])
+    assert "a.b.c.d" not in schema_4
