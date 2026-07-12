@@ -298,7 +298,8 @@ class ClickHouseConnectionAdapter(BaseAdapter):
             conditions.append(f"{ts_col} < parseDateTimeBestEffort('{end.isoformat()}')")
 
         where = f" WHERE {' AND '.join(conditions)}" if conditions else ""
-        sql = f"SELECT * FROM {database}.{table}{where} LIMIT {limit} FORMAT JSONEachRow"
+        order_by = f" ORDER BY {ts_col} DESC" if ts_col else ""
+        sql = f"SELECT * FROM {database}.{table}{where}{order_by} LIMIT {limit} FORMAT JSONEachRow"
 
         params: dict = {"query": sql}
         headers: dict = {}
@@ -447,7 +448,8 @@ class TrinoConnectionAdapter(BaseAdapter):
         if ts_col and end:
             conditions.append(f"{ts_col} < TIMESTAMP '{end.strftime('%Y-%m-%d %H:%M:%S')}'")
         where = f" WHERE {' AND '.join(conditions)}" if conditions else ""
-        sql = f"SELECT * FROM {table}{where} LIMIT {limit}"
+        order_by = f" ORDER BY {ts_col} DESC" if ts_col else ""
+        sql = f"SELECT * FROM {table}{where}{order_by} LIMIT {limit}"
 
         headers = {"X-Trino-User": user, "Content-Type": "text/plain"}
         results: list[dict] = []
@@ -579,7 +581,7 @@ class LangfuseConnectionAdapter(BaseAdapter):
 
     async def preview(self, query: str, start: datetime | None, end: datetime | None, limit: int) -> list[dict]:
         creds = self._creds_dict()
-        params: dict = {"limit": limit}
+        params: dict = {"limit": limit, "orderBy": "timestamp.desc"}
         if query:
             params["name"] = query
         if start:
@@ -789,6 +791,8 @@ class S3ConnectionAdapter(BaseAdapter):
         bucket = creds.get("bucket", "") or getattr(self._conn, "bucket", "")
         key_prefix = creds.get("key_prefix", "") or getattr(self._conn, "key_prefix", "")
         where = self._time_where(creds, start, end)
+        ts_col = _safe_ts_col(creds)
+        order_by = f" ORDER BY {ts_col} DESC" if ts_col else ""
         prefix = key_prefix.rstrip("/") + "/" if key_prefix else ""
         by_fmt = await self._sample_bucket(creds, bucket, prefix)
         readers = [(fmt, reader, opts) for fmt, reader, opts in self._READERS if by_fmt.get(fmt)]
@@ -802,7 +806,9 @@ class S3ConnectionAdapter(BaseAdapter):
             for fmt, reader, opts in readers:
                 paths = ", ".join(f"'s3://{bucket}/{key}'" for key in by_fmt[fmt])
                 try:
-                    rows = con.execute(f"SELECT * FROM {reader}([{paths}]{opts}){where} LIMIT {limit}").fetchall()
+                    rows = con.execute(
+                        f"SELECT * FROM {reader}([{paths}]{opts}){where}{order_by} LIMIT {limit}"
+                    ).fetchall()
                     cols = [d[0] for d in (con.description or [])]
                     return [dict(zip(cols, row)) for row in rows]
                 except Exception as exc:
@@ -811,7 +817,9 @@ class S3ConnectionAdapter(BaseAdapter):
             for fmt, reader, opts in fallback_readers:
                 path = f"s3://{bucket}/{prefix}**/*.{fmt}"
                 try:
-                    rows = con.execute(f"SELECT * FROM {reader}('{path}'{opts}){where} LIMIT {limit}").fetchall()
+                    rows = con.execute(
+                        f"SELECT * FROM {reader}('{path}'{opts}){where}{order_by} LIMIT {limit}"
+                    ).fetchall()
                     cols = [d[0] for d in (con.description or [])]
                     return [dict(zip(cols, row)) for row in rows]
                 except Exception as exc:
