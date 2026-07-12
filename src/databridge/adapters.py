@@ -22,6 +22,36 @@ _HTTPFS_EXT = _glob.glob(str(duckdb_extension_httpfs.__path__[0]) + "/**/httpfs.
 
 _OP_MAP = {"==": "=", "!=": "!=", ">=": ">=", "<=": "<=", ">": ">", "<": "<"}
 _RULE_RE = re.compile(r"(\w+)\s*(==|!=|>=|<=|>|<|contains)\s*'((?:[^'\\]|\\.)*)'", re.IGNORECASE)
+_IDENT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
+
+def _safe_ident(raw: Any, default: str, *, cred_name: str) -> str:
+    """Validate a credential-supplied column name as a plain SQL identifier before
+    it's interpolated into a query string, logging when it's rejected so a rejected
+    override doesn't silently produce a plausible-but-wrong query."""
+    if isinstance(raw, str) and _IDENT_RE.fullmatch(raw):
+        return raw
+    logger.warning("invalid_sql_identifier_column", cred_name=cred_name, value=raw, using_default=default)
+    return default
+
+
+def _safe_ts_col(creds: dict) -> str:
+    """Return the configured timestamp column, validated as a plain SQL identifier
+    before it's interpolated into a query string. `time_field`/`timestamp_column` can
+    come straight from an API request (see routes/connections.py, export/worker.py), so
+    anything that isn't a valid bare identifier falls back to the "timestamp" default
+    rather than being spliced into SQL unsanitized. An explicit empty string is passed
+    through as-is -- it means "no timestamp column" (time filtering disabled)."""
+    raw = creds.get("timestamp_column", "timestamp")
+    if raw == "":
+        return ""
+    return _safe_ident(raw, "timestamp", cred_name="timestamp_column")
+
+
+def _safe_search_col(creds: dict) -> str:
+    """Same validation as `_safe_ts_col`, for `search_column` -- it comes from the same
+    untrusted credential dict and is spliced into SQL the same way."""
+    return _safe_ident(creds.get("search_column", "message"), "message", cred_name="search_column")
 
 
 def _query_to_sql(expr: str, search_column: str) -> str | None:
@@ -254,8 +284,8 @@ class ClickHouseConnectionAdapter(BaseAdapter):
         database = creds.get("database", "default")
         table = creds.get("table", "llogr_events")
 
-        search_column = creds.get("search_column", "message")
-        ts_col = creds.get("timestamp_column", "timestamp")
+        search_column = _safe_search_col(creds)
+        ts_col = _safe_ts_col(creds)
         conditions: list[str] = []
         if sql_cond := _query_to_sql(query, search_column):
             conditions.append(sql_cond)
@@ -293,8 +323,8 @@ class ClickHouseConnectionAdapter(BaseAdapter):
         password = creds.get("password", "")
         database = creds.get("database", "default")
         table = creds.get("table", "llogr_events")
-        search_column = creds.get("search_column", "message")
-        ts_col = creds.get("timestamp_column", "timestamp")
+        search_column = _safe_search_col(creds)
+        ts_col = _safe_ts_col(creds)
         conditions: list[str] = []
         if sql_cond := _query_to_sql(query, search_column):
             conditions.append(sql_cond)
@@ -332,8 +362,8 @@ class ClickHouseConnectionAdapter(BaseAdapter):
         password = creds.get("password", "")
         database = creds.get("database", "default")
         table = creds.get("table", "llogr_events")
-        search_column = creds.get("search_column", "message")
-        ts_col = creds.get("timestamp_column", "timestamp")
+        search_column = _safe_search_col(creds)
+        ts_col = _safe_ts_col(creds)
         conditions: list[str] = []
         if sql_cond := _query_to_sql(query, search_column):
             conditions.append(sql_cond)
@@ -404,14 +434,15 @@ class TrinoConnectionAdapter(BaseAdapter):
         schema_name = creds.get("schema_name", "")
         table_name = creds.get("table", "events")
         table = f"{catalog}.{schema_name}.{table_name}" if catalog and schema_name else table_name
+        ts_col = _safe_ts_col(creds)
         conditions: list[str] = []
         if query:
             q_esc = query.replace("'", "''")
-            conditions.append(f"CAST({creds.get('search_column', 'message')} AS VARCHAR) LIKE '%{q_esc}%'")
-        if start:
-            conditions.append(f"timestamp >= TIMESTAMP '{start.strftime('%Y-%m-%d %H:%M:%S')}'")
-        if end:
-            conditions.append(f"timestamp < TIMESTAMP '{end.strftime('%Y-%m-%d %H:%M:%S')}'")
+            conditions.append(f"CAST({_safe_search_col(creds)} AS VARCHAR) LIKE '%{q_esc}%'")
+        if ts_col and start:
+            conditions.append(f"{ts_col} >= TIMESTAMP '{start.strftime('%Y-%m-%d %H:%M:%S')}'")
+        if ts_col and end:
+            conditions.append(f"{ts_col} < TIMESTAMP '{end.strftime('%Y-%m-%d %H:%M:%S')}'")
         where = f" WHERE {' AND '.join(conditions)}" if conditions else ""
         sql = f"SELECT * FROM {table}{where} LIMIT {limit}"
 
@@ -449,14 +480,15 @@ class TrinoConnectionAdapter(BaseAdapter):
         schema_name = creds.get("schema_name", "")
         table_name = creds.get("table", "events")
         table = f"{catalog}.{schema_name}.{table_name}" if catalog and schema_name else table_name
+        ts_col = _safe_ts_col(creds)
         conditions: list[str] = []
         if query:
             q_esc = query.replace("'", "''")
-            conditions.append(f"CAST({creds.get('search_column', 'message')} AS VARCHAR) LIKE '%{q_esc}%'")
-        if start:
-            conditions.append(f"timestamp >= TIMESTAMP '{start.strftime('%Y-%m-%d %H:%M:%S')}'")
-        if end:
-            conditions.append(f"timestamp < TIMESTAMP '{end.strftime('%Y-%m-%d %H:%M:%S')}'")
+            conditions.append(f"CAST({_safe_search_col(creds)} AS VARCHAR) LIKE '%{q_esc}%'")
+        if ts_col and start:
+            conditions.append(f"{ts_col} >= TIMESTAMP '{start.strftime('%Y-%m-%d %H:%M:%S')}'")
+        if ts_col and end:
+            conditions.append(f"{ts_col} < TIMESTAMP '{end.strftime('%Y-%m-%d %H:%M:%S')}'")
         where = f" WHERE {' AND '.join(conditions)}" if conditions else ""
         sql = f"SELECT COUNT(*) FROM {table}{where}"
         rows = await self._execute(sql, user)
@@ -478,14 +510,15 @@ class TrinoConnectionAdapter(BaseAdapter):
         schema_name = creds.get("schema_name", "")
         table_name = creds.get("table", "events")
         table = f"{catalog}.{schema_name}.{table_name}" if catalog and schema_name else table_name
+        ts_col = _safe_ts_col(creds)
         conditions: list[str] = []
         if query:
             q_esc = query.replace("'", "''")
-            conditions.append(f"CAST({creds.get('search_column', 'message')} AS VARCHAR) LIKE '%{q_esc}%'")
-        if start:
-            conditions.append(f"timestamp >= TIMESTAMP '{start.strftime('%Y-%m-%d %H:%M:%S')}'")
-        if end:
-            conditions.append(f"timestamp < TIMESTAMP '{end.strftime('%Y-%m-%d %H:%M:%S')}'")
+            conditions.append(f"CAST({_safe_search_col(creds)} AS VARCHAR) LIKE '%{q_esc}%'")
+        if ts_col and start:
+            conditions.append(f"{ts_col} >= TIMESTAMP '{start.strftime('%Y-%m-%d %H:%M:%S')}'")
+        if ts_col and end:
+            conditions.append(f"{ts_col} < TIMESTAMP '{end.strftime('%Y-%m-%d %H:%M:%S')}'")
         where = f" WHERE {' AND '.join(conditions)}" if conditions else ""
         sql = f"SELECT * FROM {table}{where} LIMIT {limit} OFFSET {offset}"
 
@@ -734,7 +767,7 @@ class S3ConnectionAdapter(BaseAdapter):
 
     @staticmethod
     def _time_where(creds: dict, start: datetime | None, end: datetime | None) -> str:
-        ts_col = creds.get("timestamp_column", "timestamp")
+        ts_col = _safe_ts_col(creds)
         conditions: list[str] = []
         if ts_col and start:
             conditions.append(f"{ts_col} >= TIMESTAMP '{start.isoformat(sep=' ')}'")
@@ -819,7 +852,7 @@ class S3ConnectionAdapter(BaseAdapter):
         bucket = creds.get("bucket", "") or getattr(self._conn, "bucket", "")
         key_prefix = creds.get("key_prefix", "") or getattr(self._conn, "key_prefix", "")
         where = self._time_where(creds, start, end)
-        ts_col = creds.get("timestamp_column", "timestamp")
+        ts_col = _safe_ts_col(creds)
         order_by = f" ORDER BY {ts_col}" if ts_col else ""
         prefix = key_prefix.rstrip("/") + "/" if key_prefix else ""
         by_fmt = await self._sample_bucket(creds, bucket, prefix)
