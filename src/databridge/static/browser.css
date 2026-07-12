@@ -292,3 +292,10 @@
   animation: dot-pulse 1.2s ease-in-out infinite;
   vertical-align: middle;
 }
+
+/* Monokai-ish JSON syntax highlighting for the cell "Full Value" popover */
+.json-pretty { background: #272822; color: #f8f8f2; padding: 0.75rem; border-radius: 0.5rem; }
+.json-pretty .jk { color: #a6e22e; } /* object keys */
+.json-pretty .js { color: #e6db74; } /* string values */
+.json-pretty .jn { color: #ae81ff; } /* numbers */
+.json-pretty .jb, .json-pretty .jz { color: #66d9ef; } /* booleans / null */

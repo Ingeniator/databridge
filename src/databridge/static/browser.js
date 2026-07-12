@@ -11,6 +11,13 @@
   let _editingId = null;
   let _schema = null;      // { field: { type, example }, ... }
   let _filterState = { query: '', start: null, end: null, time_field: null };
+  // Raw range inputs, kept separate from _filterState.start/end (which are the
+  // final shifted UTC values sent to the API) so changing _tzOffsetMinutes
+  // after a range is picked can re-derive without double-shifting.
+  let _rangePreset = null;       // preset value ('1h', '6h', ...) or 'custom' or null
+  let _customStart = null;       // Date | null, from custom-start-input
+  let _customEnd = null;         // Date | null, from custom-end-input
+  let _tzOffsetMinutes = 0;      // source data's UTC offset when stored without one, e.g. -180 for UTC-3
   let _previewRows = [];
   let _previewLimit = 50;
   let _totalCount = 0;
@@ -156,6 +163,12 @@
     _totalCount = 0;
     _previewLimit = 50;
     _filterState = { query: '', start: null, end: null, time_field: null };
+    _rangePreset = null;
+    _customStart = null;
+    _customEnd = null;
+    _tzOffsetMinutes = 0;
+    const tzSel = document.getElementById('tz-offset-select');
+    if (tzSel) tzSel.value = '0';
     _visibleColumns = null;
 
     renderConnectionTabBar();
@@ -251,7 +264,16 @@
     updateHealthBadge('SYNCING…', 'syncing');
     try {
       const data = await api('GET', `/api/v1/connections/${_activeId}/schema`);
-      _schema = data.fields || {};
+      const newFields = data.fields || {};
+      if (_visibleColumns) {
+        // A field that didn't exist in the previous schema is newly discovered —
+        // default it to visible even though the explicit Set doesn't mention it yet,
+        // rather than have it silently filtered out of the preview table.
+        for (const f of Object.keys(newFields)) {
+          if (!_schema || !(f in _schema)) _visibleColumns.add(f);
+        }
+      }
+      _schema = newFields;
       renderSchemaSection(_schema);
       updateHealthBadge('HEALTHY STATUS', 'healthy');
     } catch (e) {
@@ -292,13 +314,23 @@
     if (!_visibleColumns) _visibleColumns = new Set();
     if (checked) _visibleColumns.add(field);
     else _visibleColumns.delete(field);
+    // Collapse back to "null = all visible" once every current field is checked again,
+    // so a field added later by refreshSchema()/selectConnection() defaults to visible
+    // instead of being hidden because it's missing from a stale explicit Set.
+    if (_schema && _visibleColumns.size === Object.keys(_schema).length) {
+      _visibleColumns = null;
+    }
     updateColumnPickerMaster();
+    // renderPreviewTable rebuilds every <td>, detaching any cell the popover still
+    // references — close it rather than leave it pointing at a stale node.
+    _hideCellPopover();
     renderPreviewTable(_previewRows);
   }
 
   function _onColumnVisAllChange(checked) {
     _visibleColumns = checked ? null : new Set();
     renderColumnPicker();
+    _hideCellPopover();
     renderPreviewTable(_previewRows);
   }
 
@@ -320,6 +352,9 @@
     _filterState.time_field = fieldName || null;
     _filterState.start = null;
     _filterState.end = null;
+    _rangePreset = null;
+    _customStart = null;
+    _customEnd = null;
     const sel = document.getElementById('time-range-select');
     if (sel) sel.value = '';
     const customRow = document.getElementById('custom-range-row');
@@ -358,6 +393,62 @@
   function enableTimeRangeSelect(enabled) {
     const sel = document.getElementById('time-range-select');
     sel.disabled = !enabled;
+    const tzSel = document.getElementById('tz-offset-select');
+    if (tzSel) tzSel.disabled = !enabled;
+  }
+
+  function _populateTzOffsetSelect() {
+    const sel = document.getElementById('tz-offset-select');
+    if (!sel) return;
+    const opts = ['<option value="0">Data timezone: none (stored as UTC)</option>'];
+    for (let m = -720; m <= 840; m += 30) {
+      if (m === 0) continue;
+      const sign = m < 0 ? '−' : '+';
+      const abs = Math.abs(m);
+      const label = `UTC${sign}${String(Math.floor(abs / 60)).padStart(2, '0')}:${String(abs % 60).padStart(2, '0')}`;
+      opts.push(`<option value="${m}">Data timezone: ${label}</option>`);
+    }
+    sel.innerHTML = opts.join('');
+  }
+
+  // Applies _tzOffsetMinutes on top of a true UTC instant, for sources that
+  // store timestamps as naive local wall-clock values with no UTC marker.
+  function _tzShiftedIso(date) {
+    if (!_tzOffsetMinutes) return date.toISOString();
+    return new Date(date.getTime() + _tzOffsetMinutes * 60000).toISOString();
+  }
+
+  // Parses a <input type="datetime-local"> value ("YYYY-MM-DDTHH:mm[:ss]") as literal
+  // UTC wall-clock digits, ignoring the browser's own timezone. `new Date(value)` would
+  // instead interpret those digits as browser-local time, which would conflate the
+  // browser's own offset with the source's asserted offset once _tzShiftedIso applies
+  // _tzOffsetMinutes on top -- this keeps only the source's offset in play.
+  function _parseLocalInputAsUtc(value) {
+    const m = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2}))?/.exec(value);
+    if (!m) return null;
+    const [, y, mo, d, h, mi, s] = m;
+    return new Date(Date.UTC(+y, +mo - 1, +d, +h, +mi, s ? +s : 0));
+  }
+
+  function _recomputeFilterRange() {
+    if (_rangePreset === 'custom') {
+      _filterState.start = _customStart ? _tzShiftedIso(_customStart) : null;
+      _filterState.end = _customEnd ? _tzShiftedIso(_customEnd) : null;
+      // Both custom inputs empty means the user hasn't picked a range yet — don't
+      // fire an unbounded preview query just because an (empty) input changed.
+      if (!_customStart && !_customEnd) return;
+    } else if (_rangePreset) {
+      const now = new Date();
+      const units = { h: 3600000, d: 86400000 };
+      const n = parseInt(_rangePreset);
+      const unit = units[_rangePreset.slice(-1)] || 3600000;
+      _filterState.end = _tzShiftedIso(now);
+      _filterState.start = _tzShiftedIso(new Date(now - n * unit));
+    } else {
+      _filterState.start = null;
+      _filterState.end = null;
+    }
+    loadPreview();
   }
 
   function onTimeRangeChange(value) {
@@ -369,26 +460,24 @@
     customRow.classList.add('hidden');
     document.getElementById('custom-start-input').value = '';
     document.getElementById('custom-end-input').value = '';
-    if (!value) {
-      _filterState.start = null;
-      _filterState.end = null;
-    } else {
-      const now = new Date();
-      const units = { h: 3600000, d: 86400000 };
-      const n = parseInt(value);
-      const unit = units[value.slice(-1)] || 3600000;
-      _filterState.end = now.toISOString();
-      _filterState.start = new Date(now - n * unit).toISOString();
-    }
-    loadPreview();
+    _rangePreset = value || null;
+    _customStart = null;
+    _customEnd = null;
+    _recomputeFilterRange();
   }
 
   function onCustomRangeChange() {
     const startVal = document.getElementById('custom-start-input')?.value;
     const endVal = document.getElementById('custom-end-input')?.value;
-    _filterState.start = startVal ? new Date(startVal).toISOString() : null;
-    _filterState.end = endVal ? new Date(endVal).toISOString() : null;
-    if (_filterState.start || _filterState.end) loadPreview();
+    _customStart = startVal ? _parseLocalInputAsUtc(startVal) : null;
+    _customEnd = endVal ? _parseLocalInputAsUtc(endVal) : null;
+    _rangePreset = 'custom';
+    _recomputeFilterRange();
+  }
+
+  function onTzOffsetChange(value) {
+    _tzOffsetMinutes = parseInt(value, 10) || 0;
+    if (_rangePreset) _recomputeFilterRange();
   }
 
   // ── Predicate filter ───────────────────────────────────────────────────────
@@ -588,7 +677,7 @@
 
   // ── Load preview ───────────────────────────────────────────────────────────
   const _PREVIEW_FILTER_CONTROL_IDS = [
-    'predicate-filter-input', 'filter-advanced-btn', 'time-range-select',
+    'predicate-filter-input', 'filter-advanced-btn', 'time-range-select', 'tz-offset-select',
     'custom-start-input', 'custom-end-input', 'limit-input', 'load-more-btn',
   ];
 
@@ -664,6 +753,9 @@
 
   function clearAll() {
     _filterState = { query: '', start: null, end: null, time_field: _filterState.time_field };
+    _rangePreset = null;
+    _customStart = null;
+    _customEnd = null;
     _filterRules = [];
     _previewLimit = 50;
     const input = document.getElementById('predicate-filter-input');
@@ -778,21 +870,32 @@
     const pop = _cellPopover;
     if (!pop) return;
     _cellPopoverExpanded = !_cellPopoverExpanded;
-    const icon = pop.querySelector('.cp-expand-icon');
+    const expanding = _cellPopoverExpanded;
+    const td = _cellPopoverTd;
 
-    if (_cellPopoverExpanded) {
-      pop.classList.remove(...CELL_POPOVER_COMPACT_CLASSES);
-      pop.classList.add(...CELL_POPOVER_EXPANDED_CLASSES);
-      pop.style.left = '';
-      pop.style.top = '';
-      pop.style.maxWidth = '';
-      if (icon) icon.textContent = 'close_fullscreen';
-    } else {
-      pop.classList.remove(...CELL_POPOVER_EXPANDED_CLASSES);
-      pop.classList.add(...CELL_POPOVER_COMPACT_CLASSES);
-      if (icon) icon.textContent = 'open_in_full';
-      if (_cellPopoverTd) _positionCellPopover(_cellPopoverTd);
-    }
+    // Deferred: resizing the popover synchronously (during mousedown) moves it out from under
+    // the pointer, so the browser's subsequent click hit-tests a different element — the
+    // document-level outside-click handler then sees a click "outside" and hides the popover.
+    // Running this after the current click has fully dispatched avoids that misattribution.
+    setTimeout(() => {
+      // Bail if the popover has since moved on to a different cell, or another
+      // toggle superseded this one, while this callback was deferred.
+      if (_cellPopoverTd !== td || _cellPopoverExpanded !== expanding) return;
+      const icon = pop.querySelector('.cp-expand-icon');
+      if (expanding) {
+        pop.classList.remove(...CELL_POPOVER_COMPACT_CLASSES);
+        pop.classList.add(...CELL_POPOVER_EXPANDED_CLASSES);
+        pop.style.left = '';
+        pop.style.top = '';
+        pop.style.maxWidth = '';
+        if (icon) icon.textContent = 'close_fullscreen';
+      } else {
+        pop.classList.remove(...CELL_POPOVER_EXPANDED_CLASSES);
+        pop.classList.add(...CELL_POPOVER_COMPACT_CLASSES);
+        if (icon) icon.textContent = 'open_in_full';
+        if (_cellPopoverTd) _positionCellPopover(_cellPopoverTd);
+      }
+    }, 0);
   }
 
   function _hideCellPopover() {
@@ -1580,6 +1683,8 @@
     const payloadEl = document.getElementById('webhook-payload-input');
     if (payloadEl) payloadEl.value = _DEFAULT_WEBHOOK_TEMPLATE;
 
+    _populateTzOffsetSelect();
+
     await loadConnections();
     await loadDatasinks();
   }
@@ -1605,6 +1710,7 @@
     setTimestampField,
     onTimeRangeChange,
     onCustomRangeChange,
+    onTzOffsetChange,
     onPredicateInput,
     toggleAdvancedFilter,
     closeFilterModal,
