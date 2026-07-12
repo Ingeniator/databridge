@@ -802,30 +802,48 @@
     return _cellPopover;
   }
 
-  function _prettyPrintIfJson(text) {
+  function _tryParseJsonValue(text) {
     const trimmed = text.trim();
-    if (trimmed[0] !== '{' && trimmed[0] !== '[') return null;
+    if (trimmed[0] !== '{' && trimmed[0] !== '[') return undefined;
     try {
-      return JSON.stringify(JSON.parse(trimmed), null, 2);
+      return JSON.parse(trimmed);
     } catch {
-      return null;
+      return undefined;
     }
   }
 
-  // Tokenizes already-pretty-printed JSON into <span>-wrapped, syntax-highlighted HTML.
-  // Escapes &/</> first (not quotes) so the string-matching regex below still sees literal " chars.
-  function _highlightJson(json) {
-    const escaped = json.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-    return escaped.replace(
-      /("(?:\\u[a-fA-F0-9]{4}|\\[^u]|[^\\"])*"(\s*:)?|\btrue\b|\bfalse\b|\bnull\b|-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)/g,
-      (match) => {
-        let cls = 'jn';
-        if (/^"/.test(match)) cls = /:$/.test(match) ? 'jk' : 'js';
-        else if (match === 'true' || match === 'false') cls = 'jb';
-        else if (match === 'null') cls = 'jz';
-        return `<span class="${cls}">${match}</span>`;
-      }
-    );
+  function _jsonPrimitiveHtml(value) {
+    if (value === null) return `<span class="jz">null</span>`;
+    if (typeof value === 'boolean') return `<span class="jb">${value}</span>`;
+    if (typeof value === 'number') return `<span class="jn">${value}</span>`;
+    return `<span class="js">${esc(JSON.stringify(value))}</span>`;
+  }
+
+  // Recursively renders a parsed JSON value as indented, syntax-highlighted HTML.
+  // Each object/array becomes a `.jc-node` with a `.jc-toggle` caret so the user can
+  // collapse it to `{…}` / `[…]` in the "Full Value" popover.
+  function _renderJsonValue(value, pad) {
+    if (value === null || typeof value !== 'object') return _jsonPrimitiveHtml(value);
+
+    const isArray = Array.isArray(value);
+    const entries = isArray ? value.map((v, i) => [i, v]) : Object.entries(value);
+    const openCh = isArray ? '[' : '{';
+    const closeCh = isArray ? ']' : '}';
+    if (entries.length === 0) return `${openCh}${closeCh}`;
+
+    const childPad = pad + '  ';
+    const lines = entries.map(([k, v], i) => {
+      const comma = i < entries.length - 1 ? ',' : '';
+      const keyHtml = isArray ? '' : `<span class="jk">${esc(JSON.stringify(String(k)))}</span>: `;
+      return `${childPad}${keyHtml}${_renderJsonValue(v, childPad)}${comma}`;
+    }).join('\n');
+
+    return `<span class="jc-node"><span class="jc-toggle" onclick="window.DB._toggleJsonNode(this)"><span class="jc-caret">&#9662;</span>${openCh}</span>` +
+      `<span class="jc-children">\n${lines}\n${pad}</span><span class="jc-ellipsis">&hellip;</span>${closeCh}</span>`;
+  }
+
+  function _toggleJsonNode(toggleEl) {
+    toggleEl.closest('.jc-node')?.classList.toggle('jc-collapsed');
   }
 
   const CELL_POPOVER_COMPACT_CLASSES = ['max-w-sm', 'w-max', 'max-h-64'];
@@ -839,9 +857,9 @@
     pop.classList.remove(...CELL_POPOVER_EXPANDED_CLASSES);
     pop.classList.add(...CELL_POPOVER_COMPACT_CLASSES);
 
-    const pretty = _prettyPrintIfJson(text);
-    const body = pretty != null
-      ? `<pre class="text-xs font-mono whitespace-pre-wrap break-all select-text json-pretty">${_highlightJson(pretty)}</pre>`
+    const parsed = _tryParseJsonValue(text);
+    const body = parsed !== undefined
+      ? `<pre class="text-xs font-mono whitespace-pre-wrap break-all select-text json-pretty">${_renderJsonValue(parsed, '')}</pre>`
       : `<pre class="text-xs font-mono text-on-surface whitespace-pre-wrap break-all select-text">${esc(text)}</pre>`;
 
     pop.innerHTML = `
@@ -1741,6 +1759,7 @@
     _showCellPopover,
     _hideCellPopover,
     _toggleCellPopoverExpand,
+    _toggleJsonNode,
     _onFieldPickerFocus,
     _onFieldPickerInput,
     _onFieldPickerSelect,
