@@ -1,0 +1,188 @@
+openapi: "3.1.0"
+
+info:
+  title: "databridge — Field Extraction Stage"
+  version: "0.4.0"
+  description: |
+    Schema delta and new endpoint introduced by the Field Extraction feature
+    (004-trace-extraction). Extends `ExportJobCreate`/`ExportJobResponse` from
+    the Datasink Export Pipeline feature (specs/changes/002-datasink-export)
+    and adds one new endpoint. See specs/current/openapi.yaml for the base API.
+
+servers:
+  - url: "http://localhost:5010"
+    description: "Local development"
+
+security:
+  - GroupIDHeader: []
+  - BasicAuth: []
+
+components:
+  securitySchemes:
+    GroupIDHeader:
+      type: apiKey
+      in: header
+      name: X-Group-ID
+      description: "Format: org_id/user_id (set by upstream nginx gateway)"
+    BasicAuth:
+      type: http
+      scheme: basic
+
+  schemas:
+
+    # ── Extends ExportJobCreate (specs/changes/002-datasink-export) ──────────
+    ExportJobCreateFieldExtractionFields:
+      type: object
+      description: "New fields added to ExportJobCreate by this feature"
+      properties:
+        field_extraction:
+          type: boolean
+          default: false
+          description: "When true, replace each record with the value found at field_extraction_path before it reaches masking/sink"
+        field_extraction_path:
+          type: string
+          default: ""
+          maxLength: 255
+          description: "Dotted field path, e.g. event_properties.trace. Required (non-empty) when field_extraction is true. Any nested JSON-parseable value is a valid target -- not limited to trace payloads."
+
+    # ── Extends ExportJobResponse (specs/changes/002-datasink-export) ────────
+    ExportJobResponseFieldExtractionFields:
+      type: object
+      properties:
+        field_extraction:
+          type: boolean
+        field_extraction_path:
+          type: string
+
+    FieldExtractionTestRequest:
+      type: object
+      required:
+        - field_path
+      properties:
+        field_path:
+          type: string
+          minLength: 1
+          maxLength: 255
+
+    FieldExtractionTestResult:
+      type: object
+      required:
+        - resolved
+      properties:
+        resolved:
+          type: boolean
+        value_preview:
+          type: string
+          nullable: true
+          description: "json.dumps(value)[:500] when resolved is true"
+        error:
+          type: string
+          nullable: true
+          description: "Present when resolved is false, e.g. \"field not found or not JSON-parseable content\""
+
+    FieldExtractionTestResponse:
+      type: object
+      required:
+        - results
+      properties:
+        results:
+          type: array
+          items:
+            $ref: "#/components/schemas/FieldExtractionTestResult"
+
+    ValidationError:
+      type: object
+      description: "Standard FastAPI/Pydantic 422 shape"
+      properties:
+        detail:
+          type: array
+          items:
+            type: object
+            properties:
+              loc:
+                type: array
+                items:
+                  type: string
+              msg:
+                type: string
+              type:
+                type: string
+
+paths:
+
+  /api/v1/export-jobs:
+    post:
+      summary: "Create and enqueue a new export job"
+      description: |
+        Unchanged endpoint from specs/changes/002-datasink-export, with request
+        body extended by ExportJobCreateFieldExtractionFields and response
+        extended by ExportJobResponseFieldExtractionFields.
+      requestBody:
+        content:
+          application/json:
+            examples:
+              field_extraction_enabled:
+                summary: "Export job with field extraction enabled (trace payload example)"
+                value:
+                  datasource_type: "connection"
+                  datasource_ref: "3fa85f64-5717-4562-b3fc-2c963f66afa6"
+                  datasink_name: "local-exports-jsonl"
+                  destination_dataset: "amplitude_traces"
+                  field_extraction: true
+                  field_extraction_path: "event_properties.trace"
+      responses:
+        "201":
+          description: "Job created"
+        "422":
+          description: "field_extraction is true but field_extraction_path is empty"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ValidationError"
+              example:
+                detail:
+                  - loc: ["body", "field_extraction_path"]
+                    msg: "Value error, field_extraction_path is required when field_extraction is enabled"
+                    type: "value_error"
+
+  /api/v1/connections/{id}/test-field-extraction:
+    post:
+      summary: "Preview field extraction against sample records"
+      description: |
+        Fetches a small preview sample from the datasource (system source or
+        connection) and reports, per sample record, whether the given field
+        path resolves to usable extracted content. Mirrors
+        POST /connections/{id}/test-asset-resolution. Does not start an export
+        job or mutate any state.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/FieldExtractionTestRequest"
+            example:
+              field_path: "event_properties.trace"
+      responses:
+        "200":
+          description: "Per-record resolution results"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FieldExtractionTestResponse"
+              example:
+                results:
+                  - resolved: true
+                    value_preview: "{\"span_id\": \"abc123\", \"duration_ms\": 42}"
+                  - resolved: false
+                    error: "field not found or not JSON-parseable content"
+        "404":
+          description: "connection not found"
+        "502":
+          description: "preview fetch from the underlying datasource failed"

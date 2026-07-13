@@ -599,3 +599,70 @@ def test_asset_resolution_head_request_404(client):
     assert len(results) == 1
     assert results[0]["ok"] is False
     assert results[0]["status_code"] == 404
+
+
+# ── T012 [US1] POST /connections/{id}/test-field-extraction ───────────────────
+
+def test_field_extraction_test_not_found(client):
+    with patch("databridge.routes.connections.get_connection", new_callable=AsyncMock) as mock_get:
+        mock_get.return_value = None
+        r = client.post(f"/api/v1/connections/{CONN_ID}/test-field-extraction", json={
+            "field_path": "event_properties.trace",
+        })
+    assert r.status_code == 404
+
+
+def test_field_extraction_test_resolves(client):
+    mock_adapter = MagicMock()
+    mock_adapter.preview = AsyncMock(return_value=[
+        {"event_properties": {"trace": {"span_id": "abc"}}},
+    ])
+    with (
+        patch("databridge.routes.connections.get_connection", new_callable=AsyncMock) as mock_get,
+        patch("databridge.routes.connections.decrypt_credentials", return_value={}),
+        patch("databridge.routes.connections.get_adapter", return_value=mock_adapter),
+    ):
+        mock_get.return_value = _row()
+        r = client.post(f"/api/v1/connections/{CONN_ID}/test-field-extraction", json={
+            "field_path": "event_properties.trace",
+        })
+    assert r.status_code == 200
+    results = r.json()["results"]
+    assert len(results) == 1
+    assert results[0]["resolved"] is True
+    assert results[0]["value_preview"] is not None
+    assert "span_id" in results[0]["value_preview"]
+
+
+def test_field_extraction_test_not_resolved(client):
+    mock_adapter = MagicMock()
+    mock_adapter.preview = AsyncMock(return_value=[{"other": "field"}])
+    with (
+        patch("databridge.routes.connections.get_connection", new_callable=AsyncMock) as mock_get,
+        patch("databridge.routes.connections.decrypt_credentials", return_value={}),
+        patch("databridge.routes.connections.get_adapter", return_value=mock_adapter),
+    ):
+        mock_get.return_value = _row()
+        r = client.post(f"/api/v1/connections/{CONN_ID}/test-field-extraction", json={
+            "field_path": "event_properties.trace",
+        })
+    assert r.status_code == 200
+    results = r.json()["results"]
+    assert len(results) == 1
+    assert results[0]["resolved"] is False
+    assert results[0]["error"] is not None
+
+
+def test_field_extraction_test_preview_error_returns_502(client):
+    mock_adapter = MagicMock()
+    mock_adapter.preview = AsyncMock(side_effect=RuntimeError("db down"))
+    with (
+        patch("databridge.routes.connections.get_connection", new_callable=AsyncMock) as mock_get,
+        patch("databridge.routes.connections.decrypt_credentials", return_value={}),
+        patch("databridge.routes.connections.get_adapter", return_value=mock_adapter),
+    ):
+        mock_get.return_value = _row()
+        r = client.post(f"/api/v1/connections/{CONN_ID}/test-field-extraction", json={
+            "field_path": "event_properties.trace",
+        })
+    assert r.status_code == 502

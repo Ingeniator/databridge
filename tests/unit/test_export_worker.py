@@ -60,6 +60,8 @@ def _job_row(**kw) -> dict:
         "webhook_url": None,
         "webhook_enabled": False,
         "webhook_payload_template": None,
+        "field_extraction": False,
+        "field_extraction_path": "",
     }
     row.update(kw)
     return row
@@ -344,3 +346,181 @@ async def test_no_cap_exports_all_records():
         await run_export_job(ctx, _JOB_ID)
 
     assert sink.post_file.call_count == 15
+
+
+# ---------------------------------------------------------------------------
+# T010 [US1] — field extraction stage
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_field_extraction_replaces_record_with_extracted_value():
+    """When the field path resolves, the sink receives the extracted value, not the envelope."""
+    all_records = [
+        {"event_properties": {"trace": {"span_id": "abc", "duration_ms": 42}}, "other": "envelope-only"},
+    ]
+    pool = _make_pool(job_row=_job_row(field_extraction=True, field_extraction_path="event_properties.trace"))
+    adapter = _make_paged_adapter(all_records)
+    sink = _make_sink()
+
+    with (
+        patch(_PATCH_UPDATE_STATUS, new_callable=AsyncMock),
+        patch(_PATCH_UPDATE_PROGRESS, new_callable=AsyncMock),
+        patch(_PATCH_UPDATE_TOTAL, new_callable=AsyncMock),
+        patch(_PATCH_IS_CANCELLED, new_callable=AsyncMock, return_value=False),
+        patch(_PATCH_GET_ADAPTER, return_value=adapter),
+        patch(_PATCH_GET_SINK, return_value=sink),
+    ):
+        ctx = {"pool": pool, "settings": _settings(datasources=(_src(),))}
+        await run_export_job(ctx, _JOB_ID)
+
+    sink.post_file.assert_called_once()
+    posted_record = sink.post_file.call_args.args[1]
+    assert posted_record == {"span_id": "abc", "duration_ms": 42}
+
+
+@pytest.mark.asyncio
+async def test_field_extraction_skips_record_when_path_unresolved():
+    """Missing/unusable content at the field path drops the record and counts it as skipped."""
+    all_records = [
+        {"event_properties": {"trace": {"span_id": "abc"}}},  # resolves
+        {"event_properties": {}},  # missing field
+        {"event_properties": {"trace": "not json"}},  # unusable plain string
+    ]
+    pool = _make_pool(job_row=_job_row(field_extraction=True, field_extraction_path="event_properties.trace"))
+    adapter = _make_paged_adapter(all_records)
+    sink = _make_sink()
+
+    with (
+        patch(_PATCH_UPDATE_STATUS, new_callable=AsyncMock),
+        patch(_PATCH_UPDATE_PROGRESS, new_callable=AsyncMock) as mock_progress,
+        patch(_PATCH_UPDATE_TOTAL, new_callable=AsyncMock),
+        patch(_PATCH_IS_CANCELLED, new_callable=AsyncMock, return_value=False),
+        patch(_PATCH_GET_ADAPTER, return_value=adapter),
+        patch(_PATCH_GET_SINK, return_value=sink),
+    ):
+        ctx = {"pool": pool, "settings": _settings(datasources=(_src(),))}
+        await run_export_job(ctx, _JOB_ID)
+
+    assert sink.post_file.call_count == 1
+    # last progress update call: (pool, job_id, records_processed, records_skipped, asset_errors)
+    last_call = mock_progress.call_args_list[-1]
+    assert last_call.args[2] == 1  # records_processed
+    assert last_call.args[3] == 2  # records_skipped
+
+
+@pytest.mark.asyncio
+async def test_field_extraction_disabled_records_pass_through_unchanged():
+    """field_extraction=False (default) leaves existing behavior untouched."""
+    all_records = [{"a": 1}, {"a": 2}]
+    pool = _make_pool(job_row=_job_row())  # field_extraction defaults to False
+    adapter = _make_paged_adapter(all_records)
+    sink = _make_sink()
+
+    with (
+        patch(_PATCH_UPDATE_STATUS, new_callable=AsyncMock),
+        patch(_PATCH_UPDATE_PROGRESS, new_callable=AsyncMock),
+        patch(_PATCH_UPDATE_TOTAL, new_callable=AsyncMock),
+        patch(_PATCH_IS_CANCELLED, new_callable=AsyncMock, return_value=False),
+        patch(_PATCH_GET_ADAPTER, return_value=adapter),
+        patch(_PATCH_GET_SINK, return_value=sink),
+    ):
+        ctx = {"pool": pool, "settings": _settings(datasources=(_src(),))}
+        await run_export_job(ctx, _JOB_ID)
+
+    assert sink.post_file.call_count == 2
+    posted = [call.args[1] for call in sink.post_file.call_args_list]
+    assert posted == all_records
+
+
+# ---------------------------------------------------------------------------
+# T017 [US2] — field extraction runs before masking
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_field_extraction_then_masking_masks_extracted_field():
+    """A masking rule targeting a field inside the extracted content is applied."""
+    all_records = [
+        {"event_properties": {"trace": {"span_id": "abc", "user_email": "u@x.com"}}},
+    ]
+    pool = _make_pool(job_row=_job_row(
+        field_extraction=True,
+        field_extraction_path="event_properties.trace",
+        masking_rules=[{"field_path": "user_email", "action": "mask"}],
+    ))
+    adapter = _make_paged_adapter(all_records)
+    sink = _make_sink()
+
+    with (
+        patch(_PATCH_UPDATE_STATUS, new_callable=AsyncMock),
+        patch(_PATCH_UPDATE_PROGRESS, new_callable=AsyncMock),
+        patch(_PATCH_UPDATE_TOTAL, new_callable=AsyncMock),
+        patch(_PATCH_IS_CANCELLED, new_callable=AsyncMock, return_value=False),
+        patch(_PATCH_GET_ADAPTER, return_value=adapter),
+        patch(_PATCH_GET_SINK, return_value=sink),
+    ):
+        ctx = {"pool": pool, "settings": _settings(datasources=(_src(),))}
+        await run_export_job(ctx, _JOB_ID)
+
+    posted_record = sink.post_file.call_args.args[1]
+    assert posted_record["user_email"] == "***"
+    assert posted_record["span_id"] == "abc"
+
+
+@pytest.mark.asyncio
+async def test_field_extraction_metrics_increment():
+    """T019 [US3] — EXPORT_FIELD_EXTRACTION_SUCCESS/_FAILED counters reflect outcomes."""
+    from databridge.export_metrics import EXPORT_FIELD_EXTRACTION_FAILED, EXPORT_FIELD_EXTRACTION_SUCCESS
+
+    success_before = EXPORT_FIELD_EXTRACTION_SUCCESS._value.get()
+    failed_before = EXPORT_FIELD_EXTRACTION_FAILED._value.get()
+
+    all_records = [
+        {"event_properties": {"trace": {"span_id": "abc"}}},  # resolves -> success
+        {"event_properties": {}},  # missing -> failed
+    ]
+    pool = _make_pool(job_row=_job_row(field_extraction=True, field_extraction_path="event_properties.trace"))
+    adapter = _make_paged_adapter(all_records)
+    sink = _make_sink()
+
+    with (
+        patch(_PATCH_UPDATE_STATUS, new_callable=AsyncMock),
+        patch(_PATCH_UPDATE_PROGRESS, new_callable=AsyncMock),
+        patch(_PATCH_UPDATE_TOTAL, new_callable=AsyncMock),
+        patch(_PATCH_IS_CANCELLED, new_callable=AsyncMock, return_value=False),
+        patch(_PATCH_GET_ADAPTER, return_value=adapter),
+        patch(_PATCH_GET_SINK, return_value=sink),
+    ):
+        ctx = {"pool": pool, "settings": _settings(datasources=(_src(),))}
+        await run_export_job(ctx, _JOB_ID)
+
+    assert EXPORT_FIELD_EXTRACTION_SUCCESS._value.get() == success_before + 1
+    assert EXPORT_FIELD_EXTRACTION_FAILED._value.get() == failed_before + 1
+
+
+@pytest.mark.asyncio
+async def test_field_extraction_then_masking_envelope_only_rule_is_noop():
+    """A masking rule targeting an envelope-only field has no effect and does not error."""
+    all_records = [
+        {"event_properties": {"trace": {"span_id": "abc"}}, "envelope_secret": "shh"},
+    ]
+    pool = _make_pool(job_row=_job_row(
+        field_extraction=True,
+        field_extraction_path="event_properties.trace",
+        masking_rules=[{"field_path": "envelope_secret", "action": "mask"}],
+    ))
+    adapter = _make_paged_adapter(all_records)
+    sink = _make_sink()
+
+    with (
+        patch(_PATCH_UPDATE_STATUS, new_callable=AsyncMock),
+        patch(_PATCH_UPDATE_PROGRESS, new_callable=AsyncMock),
+        patch(_PATCH_UPDATE_TOTAL, new_callable=AsyncMock),
+        patch(_PATCH_IS_CANCELLED, new_callable=AsyncMock, return_value=False),
+        patch(_PATCH_GET_ADAPTER, return_value=adapter),
+        patch(_PATCH_GET_SINK, return_value=sink),
+    ):
+        ctx = {"pool": pool, "settings": _settings(datasources=(_src(),))}
+        await run_export_job(ctx, _JOB_ID)
+
+    posted_record = sink.post_file.call_args.args[1]
+    assert posted_record == {"span_id": "abc"}

@@ -41,6 +41,8 @@
   let _assetResolution = false;
   let _assetUrlFields = [];
   let _assetUrlPrefix = '';
+  let _fieldExtraction = false;
+  let _fieldExtractionPath = '';
   let _visibleColumns = null;  // Set<string> or null = all
   let _jobPollTimer = null;
   let _schemaCollapsed = false;
@@ -177,7 +179,7 @@
     updateHealthBadge('SYNCING…', 'syncing');
     updateLastSynced('Detecting schema…');
 
-    ['masking-toggle', 'sampling-toggle', 'asset-resolution-toggle', 'webhook-toggle'].forEach(id => {
+    ['masking-toggle', 'sampling-toggle', 'asset-resolution-toggle', 'field-extraction-toggle', 'webhook-toggle'].forEach(id => {
       const el = document.getElementById(id);
       if (el) el.disabled = false;
     });
@@ -1266,6 +1268,56 @@
     }
   }
 
+  // ── Field Extraction ──────────────────────────────────────────────────────
+  function onFieldExtractionToggle(checked) {
+    _fieldExtraction = checked;
+    document.getElementById('field-extraction-body').classList.toggle('hidden', !checked);
+    document.getElementById('field-extraction-hint').classList.toggle('hidden', checked);
+    if (!checked) document.getElementById('field-extraction-results').classList.add('hidden');
+  }
+
+  function onFieldExtractionPathChange(value) {
+    _fieldExtractionPath = value;
+  }
+
+  async function testFieldExtraction() {
+    if (!_activeId) { showError('Select a connection first.'); return; }
+    const fieldPath = document.getElementById('field-extraction-path-input')?.value?.trim() || '';
+    if (!fieldPath) { showError('Enter a field path.'); return; }
+
+    const btn = document.getElementById('test-field-extraction-btn');
+    const resultsEl = document.getElementById('field-extraction-results');
+    const bodyEl = document.getElementById('field-extraction-results-body');
+    btn.disabled = true;
+    btn.innerHTML = '<span class="material-symbols-outlined text-[16px] animate-spin">progress_activity</span> Testing…';
+
+    try {
+      const data = await api('POST', `/api/v1/connections/${_activeId}/test-field-extraction`, {
+        field_path: fieldPath,
+      });
+      const results = data.results || [];
+      if (!results.length) {
+        bodyEl.innerHTML = '<p class="px-4 py-3 text-xs text-on-surface-variant/60">No sample records available to test against.</p>';
+      } else {
+        bodyEl.innerHTML = results.map((r, n) => `
+          <div class="flex items-start gap-3 px-4 py-3 border-b border-outline-variant/10 last:border-0" data-testid="field-extraction-result-${n}">
+            <span class="mt-0.5 material-symbols-outlined text-[18px] flex-shrink-0 ${r.resolved ? 'text-green-500' : 'text-error'}">${r.resolved ? 'check_circle' : 'cancel'}</span>
+            <div class="min-w-0 flex-1 space-y-0.5">
+              ${r.resolved
+                ? `<p class="text-xs font-mono text-primary break-all">${esc(r.value_preview)}</p>`
+                : `<p class="text-[10px] text-error">${esc(r.error || 'not resolved')}</p>`}
+            </div>
+          </div>`).join('');
+      }
+      resultsEl.classList.remove('hidden');
+    } catch (e) {
+      showError('Test failed: ' + e.message);
+    } finally {
+      btn.disabled = false;
+      btn.innerHTML = '<span class="material-symbols-outlined text-[16px]">play_arrow</span> Test Extraction';
+    }
+  }
+
   async function startExport() {
     if (!_activeId) { showError('Select a connection first.'); return; }
     const datasinkName = document.getElementById('datasink-select')?.value;
@@ -1315,6 +1367,8 @@
       asset_dataset: assetDataset || null,
       masking_rules: document.getElementById('masking-toggle')?.checked ? _maskingRules : [],
       sampling_config: document.getElementById('sampling-toggle')?.checked ? _samplingConfig : null,
+      field_extraction: _fieldExtraction,
+      field_extraction_path: _fieldExtraction ? _fieldExtractionPath : '',
       webhook_url: _webhookConfig.url || null,
       webhook_enabled: _webhookConfig.enabled,
       webhook_payload_template: _webhookConfig.payloadTemplate || null,
@@ -1776,6 +1830,9 @@
     onSamplingConfigChange,
     onAssetResolutionToggle,
     testAssetResolution,
+    onFieldExtractionToggle,
+    onFieldExtractionPathChange,
+    testFieldExtraction,
     onDatasinkChange,
     onDestinationDatasetSelectChange,
     onDatasetNameChange,

@@ -357,6 +357,55 @@ def test_create_export_job_success(client):
     assert r.json()["destination_dataset"] == "out"
 
 
+# ── T011 [US1] field_extraction validation ────────────────────────────────────
+
+def test_create_export_job_field_extraction_without_path_returns_422(client):
+    settings = _mock_settings(datasinks=[_sink()])
+    body = {**_BODY, "field_extraction": True}
+    with patch("databridge.routes.export_jobs.get_settings", return_value=settings):
+        r = client.post("/api/v1/export-jobs", json=body)
+    assert r.status_code == 422
+    assert "field_extraction_path" in r.text
+
+
+def test_create_export_job_field_extraction_with_empty_path_returns_422(client):
+    settings = _mock_settings(datasinks=[_sink()])
+    body = {**_BODY, "field_extraction": True, "field_extraction_path": "   "}
+    with patch("databridge.routes.export_jobs.get_settings", return_value=settings):
+        r = client.post("/api/v1/export-jobs", json=body)
+    assert r.status_code == 422
+
+
+def test_create_export_job_field_extraction_with_path_succeeds(client):
+    settings = _mock_settings(datasinks=[_sink()])
+    job = _job(status=ExportJobStatus.pending, field_extraction=True, field_extraction_path="event_properties.trace")
+    body = {**_BODY, "field_extraction": True, "field_extraction_path": "event_properties.trace"}
+    with (
+        patch("databridge.routes.export_jobs.get_settings", return_value=settings),
+        patch("databridge.routes.export_jobs.count_active_jobs_for_org", new_callable=AsyncMock, return_value=0),
+        patch("databridge.routes.export_jobs._get_arq_pool", return_value=_mock_arq()),
+        patch("databridge.routes.export_jobs.insert_export_job", new_callable=AsyncMock, return_value=job),
+    ):
+        r = client.post("/api/v1/export-jobs", json=body)
+    assert r.status_code == 201
+    assert r.json()["field_extraction"] is True
+    assert r.json()["field_extraction_path"] == "event_properties.trace"
+
+
+def test_create_export_job_field_extraction_default_false_no_path_required(client):
+    settings = _mock_settings(datasinks=[_sink()])
+    job = _job(status=ExportJobStatus.pending)
+    with (
+        patch("databridge.routes.export_jobs.get_settings", return_value=settings),
+        patch("databridge.routes.export_jobs.count_active_jobs_for_org", new_callable=AsyncMock, return_value=0),
+        patch("databridge.routes.export_jobs._get_arq_pool", return_value=_mock_arq()),
+        patch("databridge.routes.export_jobs.insert_export_job", new_callable=AsyncMock, return_value=job),
+    ):
+        r = client.post("/api/v1/export-jobs", json=_BODY)
+    assert r.status_code == 201
+    assert r.json()["field_extraction"] is False
+
+
 # ── GET /api/v1/export-jobs ───────────────────────────────────────────────────
 
 def test_list_export_jobs_empty(client):

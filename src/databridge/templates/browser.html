@@ -588,6 +588,45 @@
           </div>
         </section>
 
+        <!-- ── Field Extraction ──────────────────────────────────────────── -->
+        <section class="bg-surface-container rounded-2xl p-6 border border-outline-variant/10 shadow-sm" data-testid="field-extraction-card">
+          <div class="flex items-center justify-between mb-5">
+            <div class="flex items-center gap-3">
+              <span class="material-symbols-outlined text-primary">data_object</span>
+              <h3 class="font-headline font-bold">Field Extraction</h3>
+            </div>
+            <label class="relative inline-flex items-center cursor-pointer">
+              <input id="field-extraction-toggle" type="checkbox" class="sr-only peer"
+                data-testid="field-extraction-toggle"
+                disabled
+                onchange="window.DB.onFieldExtractionToggle(this.checked)" />
+              <div class="w-10 h-5 bg-gray-200 rounded-full peer peer-checked:after:translate-x-full after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-primary"></div>
+            </label>
+          </div>
+          <p id="field-extraction-hint" class="text-xs text-on-surface-variant/60 leading-relaxed">Enable to replace each record with the JSON value found at a single nested field path (e.g. <code>event_properties.trace</code>) instead of exporting the full envelope.</p>
+          <div id="field-extraction-body" class="hidden space-y-4 mt-4">
+            <div class="space-y-1.5">
+              <label class="text-[10px] font-label font-bold uppercase tracking-widest text-on-surface-variant">Field Path</label>
+              <input id="field-extraction-path-input" type="text"
+                class="w-full bg-surface-container-low border-none rounded-xl py-3 px-4 text-sm font-mono focus:ring-1 focus:ring-primary/20"
+                data-testid="field-extraction-path-input"
+                placeholder="event_properties.trace"
+                oninput="window.DB.onFieldExtractionPathChange(this.value)" />
+            </div>
+            <button id="test-field-extraction-btn" type="button"
+              class="flex items-center gap-2 px-4 py-2 rounded-xl border border-primary/30 text-primary hover:bg-primary/5 transition-colors text-[11px] font-label font-bold uppercase tracking-widest"
+              data-testid="test-field-extraction-btn"
+              onclick="window.DB.testFieldExtraction()">
+              <span class="material-symbols-outlined text-[16px]">play_arrow</span>
+              Test Extraction
+            </button>
+            <div id="field-extraction-results" class="hidden space-y-2">
+              <p class="text-[10px] font-label font-bold uppercase tracking-widest text-on-surface-variant">Sample Results</p>
+              <div id="field-extraction-results-body" class="rounded-xl border border-outline-variant/20 bg-surface-container-lowest overflow-hidden"></div>
+            </div>
+          </div>
+        </section>
+
         <!-- ── Webhook Configuration ─────────────────────────────────────── -->
         <section class="bg-surface-container rounded-2xl p-6 border border-outline-variant/10 shadow-sm" data-testid="webhook-config-card">
           <div class="flex items-center justify-between mb-5">

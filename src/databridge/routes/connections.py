@@ -30,6 +30,9 @@ from databridge.export.models import (
     AssetResolutionTestRequest,
     AssetResolutionTestResponse,
     AssetUrlTestResult,
+    FieldExtractionTestRequest,
+    FieldExtractionTestResponse,
+    FieldExtractionTestResult,
     PiiFieldsResponse,
 )
 from databridge.models import (
@@ -479,3 +482,51 @@ async def test_asset_resolution(
                 ))
 
     return AssetResolutionTestResponse(results=results)
+
+
+# ── Field extraction test ──────────────────────────────────────────────────────
+
+@router.post("/connections/{id}/test-field-extraction", response_model=FieldExtractionTestResponse)
+async def test_field_extraction(
+    id: UUID,
+    body: FieldExtractionTestRequest,
+    auth: AuthContext = Depends(get_auth),
+    pool: asyncpg.Pool = Depends(get_pool),
+    system_sources: list[SystemSourceConfig] = Depends(get_system_sources),
+) -> FieldExtractionTestResponse:
+    from databridge.export.extraction import extract_field_value
+
+    # Resolve adapter (system source or DB connection)
+    adapter = None
+    for src in system_sources:
+        if src.id == id:
+            creds = {f: getattr(src, f) for f in src.__dataclass_fields__ if f not in ("name", "type")}
+            adapter = get_adapter(src, creds)
+            break
+    if adapter is None:
+        row = await get_connection(pool, id=id, owner_key=auth.public_key)
+        if row is None:
+            raise HTTPException(status_code=404, detail="connection not found")
+        creds = decrypt_credentials(row["credentials_enc"])
+        adapter = get_adapter(row, creds)
+
+    try:
+        records = await adapter.preview("", None, None, limit=5)
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"preview failed: {exc}")
+
+    results: list[FieldExtractionTestResult] = []
+    for rec in records:
+        value = extract_field_value(rec, body.field_path)
+        if value is None:
+            results.append(FieldExtractionTestResult(
+                resolved=False,
+                error="field not found or not JSON-parseable content",
+            ))
+        else:
+            results.append(FieldExtractionTestResult(
+                resolved=True,
+                value_preview=json.dumps(value)[:500],
+            ))
+
+    return FieldExtractionTestResponse(results=results)

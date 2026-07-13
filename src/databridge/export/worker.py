@@ -23,6 +23,8 @@ from databridge.export_metrics import (
     EXPORT_ACTIVE_JOBS,
     EXPORT_ASSET_RESOLUTION_FAILED,
     EXPORT_ASSET_RESOLUTION_SUCCESS,
+    EXPORT_FIELD_EXTRACTION_FAILED,
+    EXPORT_FIELD_EXTRACTION_SUCCESS,
     EXPORT_JOBS_COMPLETED,
     EXPORT_JOBS_FAILED,
     EXPORT_RECORDS_PER_SECOND,
@@ -160,6 +162,8 @@ async def run_export_job(ctx: dict, job_id: str) -> None:
         # Load masking/sampling/webhook config from job row
         masking_rules = _parse_masking_rules(job_resp.get("masking_rules"))
         sampling_config_obj = _parse_sampling_config(job_resp.get("sampling_config"))
+        field_extraction = job_resp.get("field_extraction", False)
+        field_extraction_path = job_resp.get("field_extraction_path") or ""
         webhook_url = job_resp.get("webhook_url")
         webhook_enabled = job_resp.get("webhook_enabled", False)
         webhook_payload_template = job_resp.get("webhook_payload_template")
@@ -189,6 +193,18 @@ async def run_export_job(ctx: dict, job_id: str) -> None:
                         records_skipped += 1
                         SAMPLING_RECORDS_DROPPED.labels(org_id=org_id).inc()
                         continue
+
+                # Field extraction (must run before masking so masking rules
+                # protect the record that actually reaches the sink)
+                if field_extraction:
+                    from databridge.export.extraction import extract_field_value
+                    extracted = extract_field_value(record, field_extraction_path)
+                    if extracted is None:
+                        records_skipped += 1
+                        EXPORT_FIELD_EXTRACTION_FAILED.inc()
+                        continue
+                    record = extracted
+                    EXPORT_FIELD_EXTRACTION_SUCCESS.inc()
 
                 # Masking
                 if masking_rules:
