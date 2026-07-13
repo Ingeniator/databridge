@@ -64,6 +64,7 @@ Max concurrent active (pending + running) jobs per org: **5** (configurable via 
 | `POST` | `/api/v1/export-jobs/{id}/retry` | Retry a failed job (creates new job) |
 | `GET` | `/api/v1/export-jobs/{id}/download` | Download the output file (local sinks only) |
 | `GET` | `/api/v1/connections/{id}/pii-fields` | Returns candidate PII field names for masking |
+| `POST` | `/api/v1/connections/{id}/test-field-extraction` | Preview whether a field path resolves to usable content |
 
 ## File Downloads (Local Sinks)
 
@@ -88,10 +89,14 @@ When `sampling_config` is set, records are filtered through `SamplingBuffer` bef
 
 When `webhook_enabled=true` and `webhook_url` is set, the worker fires a background `POST` to `webhook_url` after `finalise()` completes. Payload: `{job_id, status: "completed", records_processed}`. Fire-and-forget — does not block the worker.
 
+## Field Extraction (added 2026-07-13)
+
+When `field_extraction=true`, the worker replaces each record with the value found at `field_extraction_path` (a dotted path, transparently descending through JSON-encoded string containers and digit-indexed list elements) before masking runs. Only structured (JSON-parseable) content counts as usable — a missing field, empty value, or plain non-JSON string causes the record to be skipped (`records_skipped++`). See `specs/changes/004-trace-extraction/data-model.md` for the extraction function contract.
+
 ## Worker Record Loop (updated order of operations)
 
 1. Fetch page from adapter
-2. For each record: apply **sampling** (skip if dropped) → apply **masking** → resolve **assets** → write to sink
+2. For each record: apply **sampling** (skip if dropped) → apply **field extraction** (skip if unresolved) → apply **masking** → resolve **assets** → write to sink
 
 ## Metrics (updated)
 
@@ -106,6 +111,8 @@ All Prometheus instruments defined in `export_metrics.py`:
 | `export_records_per_second` | Gauge | `sink_type` |
 | `export_asset_resolution_success_total` | Counter | — |
 | `export_asset_resolution_failed_total` | Counter | — |
+| `export_field_extraction_success_total` | Counter | — |
+| `export_field_extraction_failed_total` | Counter | — |
 | `export_org_concurrent_jobs` | Gauge | `org_id` |
 | `masking_rules_applied_total` | Counter | `org_id` |
 | `sampling_records_dropped_total` | Counter | `org_id` |

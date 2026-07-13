@@ -10,7 +10,7 @@
   let _activeType = null;  // 'connection' | 'system'
   let _editingId = null;
   let _schema = null;      // { field: { type, example }, ... }
-  let _filterState = { query: '', start: null, end: null, time_field: null };
+  let _filterState = { query: '', start: null, end: null, time_field: null, sort_by: null };
   // Raw range inputs, kept separate from _filterState.start/end (which are the
   // final shifted UTC values sent to the API) so changing _tzOffsetMinutes
   // after a range is picked can re-derive without double-shifting.
@@ -41,6 +41,9 @@
   let _assetResolution = false;
   let _assetUrlFields = [];
   let _assetUrlPrefix = '';
+  let _fieldExtraction = false;
+  let _fieldExtractionPath = '';
+  let _extractedSchemaFields = null;  // string[] derived from Test Extraction samples, or null
   let _visibleColumns = null;  // Set<string> or null = all
   let _jobPollTimer = null;
   let _schemaCollapsed = false;
@@ -159,10 +162,11 @@
     _activeId = id;
     _activeType = isSystem ? 'system' : 'connection';
     _schema = null;
+    _extractedSchemaFields = null;
     _previewRows = [];
     _totalCount = 0;
     _previewLimit = 50;
-    _filterState = { query: '', start: null, end: null, time_field: null };
+    _filterState = { query: '', start: null, end: null, time_field: null, sort_by: null };
     _rangePreset = null;
     _customStart = null;
     _customEnd = null;
@@ -177,7 +181,7 @@
     updateHealthBadge('SYNCING…', 'syncing');
     updateLastSynced('Detecting schema…');
 
-    ['masking-toggle', 'sampling-toggle', 'asset-resolution-toggle', 'webhook-toggle'].forEach(id => {
+    ['masking-toggle', 'sampling-toggle', 'asset-resolution-toggle', 'field-extraction-toggle', 'webhook-toggle'].forEach(id => {
       const el = document.getElementById(id);
       if (el) el.disabled = false;
     });
@@ -388,6 +392,14 @@
     const cycle = [null, ...Object.keys(_schema)];
     const idx = cycle.indexOf(_filterState.time_field);
     _applyTimestampField(cycle[(idx + 1) % cycle.length]);
+  }
+
+  // Independent of the timestamp filter field above -- this only controls the
+  // ORDER BY on the preview query, defaulting server-side to the timestamp
+  // field when unset (see PreviewRequest.sort_by).
+  function setSortField(fieldName) {
+    _filterState.sort_by = _filterState.sort_by === fieldName ? null : fieldName;
+    loadPreview();
   }
 
   function enableTimeRangeSelect(enabled) {
@@ -657,7 +669,12 @@
     let cols = Array.from(new Set(rows.flatMap(r => Object.keys(r))));
     if (_visibleColumns) cols = cols.filter(c => _visibleColumns.has(c));
 
-    thead.innerHTML = `<tr>${cols.map(c => `<th class="py-1 px-2 font-medium text-left whitespace-nowrap">${esc(c)}</th>`).join('')}</tr>`;
+    const activeSort = _filterState.sort_by || _filterState.time_field;
+    thead.innerHTML = `<tr>${cols.map(c => {
+      const isSorted = c === activeSort;
+      return `<th class="py-1 px-2 font-medium text-left whitespace-nowrap cursor-pointer select-none hover:text-primary transition-colors${isSorted ? ' text-primary' : ''}"
+        title="Sort preview by ${esc(c)}" onclick="window.DB.setSortField('${esc(c)}')">${esc(c)}${isSorted ? ' <span class="material-symbols-outlined text-[14px] align-middle">arrow_downward</span>' : ''}</th>`;
+    }).join('')}</tr>`;
     tbody.innerHTML = rows.map((row, n) => `
       <tr data-testid="preview-row-${n}" class="hover:bg-gray-50">
         ${cols.map(c => `<td class="py-1 px-2 font-mono whitespace-nowrap max-w-xs truncate cursor-pointer hover:text-primary transition-colors" data-full="${esc(cellStr(row[c] ?? ''))}" onclick="window.DB._showCellPopover(this)">${statusCellHtml(c, row[c] ?? '')}</td>`).join('')}
@@ -708,6 +725,7 @@
         query: _filterState.query,
         limit: _previewLimit,
         time_field: _filterState.time_field || undefined,
+        sort_by: _filterState.sort_by || undefined,
         start: _filterState.start || undefined,
         end: _filterState.end || undefined,
       };
@@ -752,7 +770,7 @@
   }
 
   function clearAll() {
-    _filterState = { query: '', start: null, end: null, time_field: _filterState.time_field };
+    _filterState = { query: '', start: null, end: null, time_field: _filterState.time_field, sort_by: _filterState.sort_by };
     _rangePreset = null;
     _customStart = null;
     _customEnd = null;
@@ -788,30 +806,48 @@
     return _cellPopover;
   }
 
-  function _prettyPrintIfJson(text) {
+  function _tryParseJsonValue(text) {
     const trimmed = text.trim();
-    if (trimmed[0] !== '{' && trimmed[0] !== '[') return null;
+    if (trimmed[0] !== '{' && trimmed[0] !== '[') return undefined;
     try {
-      return JSON.stringify(JSON.parse(trimmed), null, 2);
+      return JSON.parse(trimmed);
     } catch {
-      return null;
+      return undefined;
     }
   }
 
-  // Tokenizes already-pretty-printed JSON into <span>-wrapped, syntax-highlighted HTML.
-  // Escapes &/</> first (not quotes) so the string-matching regex below still sees literal " chars.
-  function _highlightJson(json) {
-    const escaped = json.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-    return escaped.replace(
-      /("(?:\\u[a-fA-F0-9]{4}|\\[^u]|[^\\"])*"(\s*:)?|\btrue\b|\bfalse\b|\bnull\b|-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)/g,
-      (match) => {
-        let cls = 'jn';
-        if (/^"/.test(match)) cls = /:$/.test(match) ? 'jk' : 'js';
-        else if (match === 'true' || match === 'false') cls = 'jb';
-        else if (match === 'null') cls = 'jz';
-        return `<span class="${cls}">${match}</span>`;
-      }
-    );
+  function _jsonPrimitiveHtml(value) {
+    if (value === null) return `<span class="jz">null</span>`;
+    if (typeof value === 'boolean') return `<span class="jb">${value}</span>`;
+    if (typeof value === 'number') return `<span class="jn">${value}</span>`;
+    return `<span class="js">${esc(JSON.stringify(value))}</span>`;
+  }
+
+  // Recursively renders a parsed JSON value as indented, syntax-highlighted HTML.
+  // Each object/array becomes a `.jc-node` with a `.jc-toggle` caret so the user can
+  // collapse it to `{…}` / `[…]` in the "Full Value" popover.
+  function _renderJsonValue(value, pad) {
+    if (value === null || typeof value !== 'object') return _jsonPrimitiveHtml(value);
+
+    const isArray = Array.isArray(value);
+    const entries = isArray ? value.map((v, i) => [i, v]) : Object.entries(value);
+    const openCh = isArray ? '[' : '{';
+    const closeCh = isArray ? ']' : '}';
+    if (entries.length === 0) return `${openCh}${closeCh}`;
+
+    const childPad = pad + '  ';
+    const lines = entries.map(([k, v], i) => {
+      const comma = i < entries.length - 1 ? ',' : '';
+      const keyHtml = isArray ? '' : `<span class="jk">${esc(JSON.stringify(String(k)))}</span>: `;
+      return `${childPad}${keyHtml}${_renderJsonValue(v, childPad)}${comma}`;
+    }).join('\n');
+
+    return `<span class="jc-node"><span class="jc-toggle" onclick="window.DB._toggleJsonNode(this)"><span class="jc-caret">&#9662;</span>${openCh}</span>` +
+      `<span class="jc-children">\n${lines}\n${pad}</span><span class="jc-ellipsis">&hellip;</span>${closeCh}</span>`;
+  }
+
+  function _toggleJsonNode(toggleEl) {
+    toggleEl.closest('.jc-node')?.classList.toggle('jc-collapsed');
   }
 
   const CELL_POPOVER_COMPACT_CLASSES = ['max-w-sm', 'w-max', 'max-h-64'];
@@ -825,9 +861,9 @@
     pop.classList.remove(...CELL_POPOVER_EXPANDED_CLASSES);
     pop.classList.add(...CELL_POPOVER_COMPACT_CLASSES);
 
-    const pretty = _prettyPrintIfJson(text);
-    const body = pretty != null
-      ? `<pre class="text-xs font-mono whitespace-pre-wrap break-all select-text json-pretty">${_highlightJson(pretty)}</pre>`
+    const parsed = _tryParseJsonValue(text);
+    const body = parsed !== undefined
+      ? `<pre class="text-xs font-mono whitespace-pre-wrap break-all select-text json-pretty">${_renderJsonValue(parsed, '')}</pre>`
       : `<pre class="text-xs font-mono text-on-surface whitespace-pre-wrap break-all select-text">${esc(text)}</pre>`;
 
     pop.innerHTML = `
@@ -905,7 +941,45 @@
 
   // ── Field Picker combobox ──────────────────────────────────────────────────
   function _getSchemaFieldNames() {
+    // When field extraction is enabled, masking/asset-resolution rules apply to
+    // the extracted record, not the original envelope -- so the picker must
+    // offer the extracted shape's keys (derived from the last Test Extraction
+    // run), not the original /schema keys, once available.
+    if (_fieldExtraction && _extractedSchemaFields) return _extractedSchemaFields;
     return _schema ? Object.keys(_schema) : [];
+  }
+
+  // Flattens sample extracted values into dotted-path field names, mirroring
+  // the server's _infer_schema_nested (adapters.py): dicts recurse, lists are
+  // treated as opaque leaves (not indexed), matching what the picker already
+  // offers for the original schema.
+  function _flattenKeys(obj, prefix, depth, out) {
+    if (depth > 3) return;
+    if (typeof obj === 'string') {
+      const t = obj.trimStart()[0];
+      if (t === '{' || t === '[') {
+        try { obj = JSON.parse(obj); } catch { /* leave as string leaf */ }
+      }
+    }
+    if (obj && typeof obj === 'object' && !Array.isArray(obj)) {
+      for (const k of Object.keys(obj)) {
+        if (k.startsWith('_')) continue;
+        _flattenKeys(obj[k], prefix ? `${prefix}.${k}` : k, depth + 1, out);
+      }
+    } else if (prefix) {
+      out.add(prefix);
+    }
+  }
+
+  function _deriveExtractedSchemaFields(results) {
+    const keys = new Set();
+    for (const r of (results || [])) {
+      if (!r.resolved || !r.value_preview) continue;
+      try {
+        _flattenKeys(JSON.parse(r.value_preview), '', 0, keys);
+      } catch { /* skip unparseable preview */ }
+    }
+    _extractedSchemaFields = keys.size ? Array.from(keys).sort() : null;
   }
 
   function _ensureFpDropdown() {
@@ -939,7 +1013,10 @@
 
     const fields = _getSchemaFieldNames().filter(f => !query || f.toLowerCase().includes(query));
     if (!fields.length) {
-      dd.innerHTML = '<p class="text-xs text-on-surface-variant/50 px-3 py-2 italic">No schema fields available</p>';
+      const msg = (_fieldExtraction && !_extractedSchemaFields)
+        ? 'Run Test Extraction above to see available fields'
+        : 'No schema fields available';
+      dd.innerHTML = `<p class="text-xs text-on-surface-variant/50 px-3 py-2 italic">${msg}</p>`;
     } else {
       dd.innerHTML = fields.map(f =>
         `<button type="button" data-field="${esc(f)}"
@@ -1234,6 +1311,61 @@
     }
   }
 
+  // ── Field Extraction ──────────────────────────────────────────────────────
+  function onFieldExtractionToggle(checked) {
+    _fieldExtraction = checked;
+    document.getElementById('field-extraction-body').classList.toggle('hidden', !checked);
+    document.getElementById('field-extraction-hint').classList.toggle('hidden', checked);
+    if (!checked) {
+      document.getElementById('field-extraction-results').classList.add('hidden');
+      _extractedSchemaFields = null;
+    }
+  }
+
+  function onFieldExtractionPathChange(value) {
+    _fieldExtractionPath = value;
+    _extractedSchemaFields = null;  // stale until re-tested against the new path
+  }
+
+  async function testFieldExtraction() {
+    if (!_activeId) { showError('Select a connection first.'); return; }
+    const fieldPath = document.getElementById('field-extraction-path-input')?.value?.trim() || '';
+    if (!fieldPath) { showError('Enter a field path.'); return; }
+
+    const btn = document.getElementById('test-field-extraction-btn');
+    const resultsEl = document.getElementById('field-extraction-results');
+    const bodyEl = document.getElementById('field-extraction-results-body');
+    btn.disabled = true;
+    btn.innerHTML = '<span class="material-symbols-outlined text-[16px] animate-spin">progress_activity</span> Testing…';
+
+    try {
+      const data = await api('POST', `/api/v1/connections/${_activeId}/test-field-extraction`, {
+        field_path: fieldPath,
+      });
+      const results = data.results || [];
+      _deriveExtractedSchemaFields(results);
+      if (!results.length) {
+        bodyEl.innerHTML = '<p class="px-4 py-3 text-xs text-on-surface-variant/60">No sample records available to test against.</p>';
+      } else {
+        bodyEl.innerHTML = results.map((r, n) => `
+          <div class="flex items-start gap-3 px-4 py-3 border-b border-outline-variant/10 last:border-0" data-testid="field-extraction-result-${n}">
+            <span class="mt-0.5 material-symbols-outlined text-[18px] flex-shrink-0 ${r.resolved ? 'text-green-500' : 'text-error'}">${r.resolved ? 'check_circle' : 'cancel'}</span>
+            <div class="min-w-0 flex-1 space-y-0.5">
+              ${r.resolved
+                ? `<p class="text-xs font-mono text-primary break-all">${esc(r.value_preview)}</p>`
+                : `<p class="text-[10px] text-error">${esc(r.error || 'not resolved')}</p>`}
+            </div>
+          </div>`).join('');
+      }
+      resultsEl.classList.remove('hidden');
+    } catch (e) {
+      showError('Test failed: ' + e.message);
+    } finally {
+      btn.disabled = false;
+      btn.innerHTML = '<span class="material-symbols-outlined text-[16px]">play_arrow</span> Test Extraction';
+    }
+  }
+
   async function startExport() {
     if (!_activeId) { showError('Select a connection first.'); return; }
     const datasinkName = document.getElementById('datasink-select')?.value;
@@ -1283,6 +1415,8 @@
       asset_dataset: assetDataset || null,
       masking_rules: document.getElementById('masking-toggle')?.checked ? _maskingRules : [],
       sampling_config: document.getElementById('sampling-toggle')?.checked ? _samplingConfig : null,
+      field_extraction: _fieldExtraction,
+      field_extraction_path: _fieldExtraction ? _fieldExtractionPath : '',
       webhook_url: _webhookConfig.url || null,
       webhook_enabled: _webhookConfig.enabled,
       webhook_payload_template: _webhookConfig.payloadTemplate || null,
@@ -1708,6 +1842,7 @@
     _onColumnVisAllChange,
     cycleTimeField,
     setTimestampField,
+    setSortField,
     onTimeRangeChange,
     onCustomRangeChange,
     onTzOffsetChange,
@@ -1726,6 +1861,7 @@
     _showCellPopover,
     _hideCellPopover,
     _toggleCellPopoverExpand,
+    _toggleJsonNode,
     _onFieldPickerFocus,
     _onFieldPickerInput,
     _onFieldPickerSelect,
@@ -1742,6 +1878,9 @@
     onSamplingConfigChange,
     onAssetResolutionToggle,
     testAssetResolution,
+    onFieldExtractionToggle,
+    onFieldExtractionPathChange,
+    testFieldExtraction,
     onDatasinkChange,
     onDestinationDatasetSelectChange,
     onDatasetNameChange,

@@ -47,7 +47,7 @@ class _MaskingPool:
                   asset_resolution, asset_url_fields, asset_url_prefix,
                   asset_datasink_name, asset_dataset,
                   masking_rules, sampling_config, webhook_url, webhook_enabled,
-                  webhook_payload_template):
+                  webhook_payload_template, field_extraction, field_extraction_path):
         now = datetime.now(timezone.utc)
         job_id = uuid4()
         job = {
@@ -69,6 +69,8 @@ class _MaskingPool:
             "webhook_url": webhook_url,
             "webhook_enabled": webhook_enabled or False,
             "webhook_payload_template": webhook_payload_template,
+            "field_extraction": field_extraction or False,
+            "field_extraction_path": field_extraction_path or "",
         }
         self._jobs[str(job_id)] = job
         return job
@@ -132,7 +134,11 @@ def masking_client(config_masking, monkeypatch):
     get_settings.cache_clear()
 
     pool = _MaskingPool()
-    with patch("databridge.main.create_pool", AsyncMock(return_value=pool)):
+    _arq_mock = MagicMock(ping=AsyncMock(), enqueue_job=AsyncMock(), aclose=AsyncMock())
+    with (
+        patch("databridge.main.create_pool", AsyncMock(return_value=pool)),
+        patch("arq.create_pool", AsyncMock(return_value=_arq_mock)),
+    ):
         from databridge.main import create_app
         app = create_app()
         with TestClient(app, raise_server_exceptions=False) as c:
@@ -259,3 +265,74 @@ def test_retry_preserves_masking_sampling_webhook(masking_client):
     assert new_job["sampling_config"]["method"] == "systematic"
     assert new_job["webhook_url"] == "http://hook.example.com"
     assert new_job["webhook_enabled"] is True
+
+
+# ── T019 [US3] field_extraction config round-trips through create/get/list ──
+
+def test_create_job_with_field_extraction(masking_client):
+    c, pool = masking_client
+    r = c.post(
+        "/api/v1/export-jobs",
+        json={
+            "datasource_type": "system",
+            "datasource_ref": "fake-ref",
+            "datasink_name": SINK_NAME,
+            "destination_dataset": "extraction_export",
+            "field_extraction": True,
+            "field_extraction_path": "event_properties.trace",
+        },
+        headers={"X-Group-ID": "testorg"},
+    )
+    assert r.status_code == 201, r.text
+    body = r.json()
+    assert body["field_extraction"] is True
+    assert body["field_extraction_path"] == "event_properties.trace"
+
+
+def test_list_jobs_includes_field_extraction_fields(masking_client):
+    c, pool = masking_client
+    c.post(
+        "/api/v1/export-jobs",
+        json={
+            "datasource_type": "system",
+            "datasource_ref": "ref",
+            "datasink_name": SINK_NAME,
+            "destination_dataset": "ds2",
+            "field_extraction": True,
+            "field_extraction_path": "payload.trace",
+        },
+        headers={"X-Group-ID": "testorg"},
+    )
+    r = c.get("/api/v1/export-jobs", headers={"X-Group-ID": "testorg"})
+    assert r.status_code == 200, r.text
+    items = r.json()["items"]
+    assert len(items) >= 1
+    for item in items:
+        assert "field_extraction" in item
+        assert "field_extraction_path" in item
+
+
+def test_get_job_reports_records_skipped_field(masking_client):
+    """records_skipped (which field extraction failures feed into) is visible via GET."""
+    c, pool = masking_client
+    create_r = c.post(
+        "/api/v1/export-jobs",
+        json={
+            "datasource_type": "system",
+            "datasource_ref": "ref",
+            "datasink_name": SINK_NAME,
+            "destination_dataset": "ds3",
+            "field_extraction": True,
+            "field_extraction_path": "payload.trace",
+        },
+        headers={"X-Group-ID": "testorg"},
+    )
+    job_id = create_r.json()["id"]
+    # Simulate the worker having skipped some records due to unresolved field paths
+    pool._jobs[job_id]["records_skipped"] = 3
+    pool._jobs[job_id]["records_processed"] = 7
+
+    r = c.get(f"/api/v1/export-jobs/{job_id}", headers={"X-Group-ID": "testorg"})
+    assert r.status_code == 200, r.text
+    assert r.json()["records_skipped"] == 3
+    assert r.json()["records_processed"] == 7

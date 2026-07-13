@@ -35,6 +35,14 @@ EXPORT_ASSET_RESOLUTION_FAILED = Counter(
     "export_asset_resolution_failed_total",
     "Asset fetches that failed (record skipped)",
 )
+EXPORT_FIELD_EXTRACTION_SUCCESS = Counter(
+    "export_field_extraction_success_total",
+    "Records successfully reduced to their extracted field value",
+)
+EXPORT_FIELD_EXTRACTION_FAILED = Counter(
+    "export_field_extraction_failed_total",
+    "Records skipped because the configured field extraction path did not resolve to usable content",
+)
 EXPORT_ORG_CONCURRENT_JOBS = Gauge(
     "export_org_concurrent_jobs",
     "Concurrent export jobs per org (running + pending)",

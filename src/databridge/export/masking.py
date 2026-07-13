@@ -5,6 +5,7 @@ import json
 from copy import deepcopy
 from typing import Any
 
+from databridge.export.extraction import _decode_and_index
 from databridge.export.models import MaskingAction, MaskingRule
 
 _PII_NAME_PATTERNS = (
@@ -16,42 +17,26 @@ _PII_NAME_PATTERNS = (
 def _apply_at_path(container: Any, parts: list[str], action: MaskingAction) -> tuple[Any, bool]:
     """Recursively apply `action` at the dotted path `parts` inside `container`.
 
-    Transparently descends into JSON-encoded string values (parsing them, applying
-    the action, then re-serializing back to a string) since `_infer_schema_nested`'s
-    PII discovery (adapters.py) surfaces dotted paths through stringified JSON that a
-    plain dict-only walk would miss -- without this, fields discovered that way would
-    be silently un-maskable. A path segment that is a plain integer also indexes into
-    a list, so a manually-configured path like "items.0.email" can reach fields nested
-    inside array elements (`field_path` isn't restricted to auto-discovered candidates).
-    Returns (possibly-updated container, whether a value was actually found and the
-    action applied).
+    The single-segment descend step (transparently parsing JSON-encoded string
+    containers, and indexing into lists when a path segment is a plain digit
+    -- e.g. "items.0.email") is shared with field extraction's read-only
+    traversal via `extraction._decode_and_index`, since `_infer_schema_nested`'s
+    PII discovery (adapters.py) surfaces dotted paths through stringified JSON
+    that a plain dict-only walk would miss, and field extraction has the same
+    problem reaching into enveloped JSON fields. This wrapper re-serializes the
+    mutated node back to a string when the container was originally one.
+    Returns (possibly-updated container, whether a value was actually found and
+    the action applied).
     """
-    node = container
-    reparse = isinstance(node, str)
-    if reparse:
-        try:
-            node = json.loads(node)
-        except (json.JSONDecodeError, ValueError):
-            return container, False
-
-    key = parts[0]
-    if isinstance(node, list):
-        if not key.isdigit() or int(key) >= len(node):
-            return container, False
-        idx = int(key)
-        if len(parts) == 1:
-            applied = _apply_action(node, idx, action)
-        else:
-            node[idx], applied = _apply_at_path(node[idx], parts[1:], action)
-    elif isinstance(node, dict):
-        if key not in node:
-            return container, False
-        if len(parts) == 1:
-            applied = _apply_action(node, key, action)
-        else:
-            node[key], applied = _apply_at_path(node[key], parts[1:], action)
-    else:
+    reparse = isinstance(container, str)
+    node, idx_or_key, found = _decode_and_index(container, parts[0])
+    if not found:
         return container, False
+
+    if len(parts) == 1:
+        applied = _apply_action(node, idx_or_key, action)
+    else:
+        node[idx_or_key], applied = _apply_at_path(node[idx_or_key], parts[1:], action)
 
     return (json.dumps(node, ensure_ascii=False) if reparse else node), applied
 

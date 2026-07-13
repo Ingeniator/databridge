@@ -5,7 +5,7 @@ from enum import Enum
 from typing import Annotated, Literal
 from uuid import UUID
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 class FilterSnapshot(BaseModel):
@@ -82,6 +82,8 @@ class ExportJob(BaseModel):
     webhook_url: str | None = None
     webhook_enabled: bool = False
     webhook_payload_template: str | None = None
+    field_extraction: bool = False
+    field_extraction_path: str = ""
 
 
 class ExportJobCreate(BaseModel):
@@ -100,6 +102,14 @@ class ExportJobCreate(BaseModel):
     webhook_url: str | None = None
     webhook_enabled: bool = False
     webhook_payload_template: str | None = None
+    field_extraction: bool = False
+    field_extraction_path: str = ""
+
+    @model_validator(mode="after")
+    def _validate_field_extraction(self) -> "ExportJobCreate":
+        if self.field_extraction and not self.field_extraction_path.strip():
+            raise ValueError("field_extraction_path is required when field_extraction is enabled")
+        return self
 
 
 class ExportJobResponse(BaseModel):
@@ -130,6 +140,8 @@ class ExportJobResponse(BaseModel):
     webhook_url: str | None = None
     webhook_enabled: bool = False
     webhook_payload_template: str | None = None
+    field_extraction: bool = False
+    field_extraction_path: str = ""
     external_dataset_id: str | None = None
     external_asset_dataset_id: str | None = None
     download_url: str = ""
@@ -186,3 +198,17 @@ class AssetUrlTestResult(BaseModel):
 
 class AssetResolutionTestResponse(BaseModel):
     results: list[AssetUrlTestResult]
+
+
+class FieldExtractionTestRequest(BaseModel):
+    field_path: Annotated[str, Field(min_length=1, max_length=255)]
+
+
+class FieldExtractionTestResult(BaseModel):
+    resolved: bool
+    value_preview: str | None = None
+    error: str | None = None
+
+
+class FieldExtractionTestResponse(BaseModel):
+    results: list[FieldExtractionTestResult]

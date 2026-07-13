@@ -299,3 +299,11 @@
 .json-pretty .js { color: #e6db74; } /* string values */
 .json-pretty .jn { color: #ae81ff; } /* numbers */
 .json-pretty .jb, .json-pretty .jz { color: #66d9ef; } /* booleans / null */
+
+/* Collapsible object/array blocks within the JSON popover */
+.json-pretty .jc-toggle { cursor: pointer; user-select: none; }
+.json-pretty .jc-caret { display: inline-block; width: 0.85em; color: #75715e; transition: transform 0.1s ease; }
+.json-pretty .jc-node.jc-collapsed > .jc-toggle .jc-caret { transform: rotate(-90deg); }
+.json-pretty .jc-ellipsis { display: none; color: #75715e; }
+.json-pretty .jc-node.jc-collapsed > .jc-children { display: none; }
+.json-pretty .jc-node.jc-collapsed > .jc-ellipsis { display: inline; }
