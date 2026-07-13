@@ -43,6 +43,7 @@
   let _assetUrlPrefix = '';
   let _fieldExtraction = false;
   let _fieldExtractionPath = '';
+  let _extractedSchemaFields = null;  // string[] derived from Test Extraction samples, or null
   let _visibleColumns = null;  // Set<string> or null = all
   let _jobPollTimer = null;
   let _schemaCollapsed = false;
@@ -161,6 +162,7 @@
     _activeId = id;
     _activeType = isSystem ? 'system' : 'connection';
     _schema = null;
+    _extractedSchemaFields = null;
     _previewRows = [];
     _totalCount = 0;
     _previewLimit = 50;
@@ -939,7 +941,45 @@
 
   // ── Field Picker combobox ──────────────────────────────────────────────────
   function _getSchemaFieldNames() {
+    // When field extraction is enabled, masking/asset-resolution rules apply to
+    // the extracted record, not the original envelope -- so the picker must
+    // offer the extracted shape's keys (derived from the last Test Extraction
+    // run), not the original /schema keys, once available.
+    if (_fieldExtraction && _extractedSchemaFields) return _extractedSchemaFields;
     return _schema ? Object.keys(_schema) : [];
+  }
+
+  // Flattens sample extracted values into dotted-path field names, mirroring
+  // the server's _infer_schema_nested (adapters.py): dicts recurse, lists are
+  // treated as opaque leaves (not indexed), matching what the picker already
+  // offers for the original schema.
+  function _flattenKeys(obj, prefix, depth, out) {
+    if (depth > 3) return;
+    if (typeof obj === 'string') {
+      const t = obj.trimStart()[0];
+      if (t === '{' || t === '[') {
+        try { obj = JSON.parse(obj); } catch { /* leave as string leaf */ }
+      }
+    }
+    if (obj && typeof obj === 'object' && !Array.isArray(obj)) {
+      for (const k of Object.keys(obj)) {
+        if (k.startsWith('_')) continue;
+        _flattenKeys(obj[k], prefix ? `${prefix}.${k}` : k, depth + 1, out);
+      }
+    } else if (prefix) {
+      out.add(prefix);
+    }
+  }
+
+  function _deriveExtractedSchemaFields(results) {
+    const keys = new Set();
+    for (const r of (results || [])) {
+      if (!r.resolved || !r.value_preview) continue;
+      try {
+        _flattenKeys(JSON.parse(r.value_preview), '', 0, keys);
+      } catch { /* skip unparseable preview */ }
+    }
+    _extractedSchemaFields = keys.size ? Array.from(keys).sort() : null;
   }
 
   function _ensureFpDropdown() {
@@ -973,7 +1013,10 @@
 
     const fields = _getSchemaFieldNames().filter(f => !query || f.toLowerCase().includes(query));
     if (!fields.length) {
-      dd.innerHTML = '<p class="text-xs text-on-surface-variant/50 px-3 py-2 italic">No schema fields available</p>';
+      const msg = (_fieldExtraction && !_extractedSchemaFields)
+        ? 'Run Test Extraction above to see available fields'
+        : 'No schema fields available';
+      dd.innerHTML = `<p class="text-xs text-on-surface-variant/50 px-3 py-2 italic">${msg}</p>`;
     } else {
       dd.innerHTML = fields.map(f =>
         `<button type="button" data-field="${esc(f)}"
@@ -1273,11 +1316,15 @@
     _fieldExtraction = checked;
     document.getElementById('field-extraction-body').classList.toggle('hidden', !checked);
     document.getElementById('field-extraction-hint').classList.toggle('hidden', checked);
-    if (!checked) document.getElementById('field-extraction-results').classList.add('hidden');
+    if (!checked) {
+      document.getElementById('field-extraction-results').classList.add('hidden');
+      _extractedSchemaFields = null;
+    }
   }
 
   function onFieldExtractionPathChange(value) {
     _fieldExtractionPath = value;
+    _extractedSchemaFields = null;  // stale until re-tested against the new path
   }
 
   async function testFieldExtraction() {
@@ -1296,6 +1343,7 @@
         field_path: fieldPath,
       });
       const results = data.results || [];
+      _deriveExtractedSchemaFields(results);
       if (!results.length) {
         bodyEl.innerHTML = '<p class="px-4 py-3 text-xs text-on-surface-variant/60">No sample records available to test against.</p>';
       } else {
